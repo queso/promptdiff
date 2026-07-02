@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import type { GraderSpec } from "./grader";
+import { deliveryValue, type Delivery } from "./skill-install";
 import type { RunMode } from "../types";
 
 export type ScenarioKind = "target" | "regression";
@@ -22,6 +23,7 @@ export interface CompareConfig {
   agent: string;
   baselineSkills: string[];
   proposedSkills: string[];
+  delivery: Delivery;
   model: string;
   runs: number;
   timeoutMs: number;
@@ -39,6 +41,7 @@ export interface CompareOverrides {
   agent?: string;
   baselineSkills?: string[];
   proposedSkills?: string[];
+  delivery?: Delivery;
   model?: string;
   runs?: number;
   timeoutMs?: number;
@@ -58,6 +61,7 @@ interface RawCompareConfig {
   proposedSkills?: unknown;
   baseline?: unknown;
   proposed?: unknown;
+  delivery?: unknown;
   model?: unknown;
   runs?: unknown;
   timeoutMs?: unknown;
@@ -115,6 +119,7 @@ export function loadCompareConfig(path: string, overrides: CompareOverrides = {}
     agent: resolveRequired(baseDir, overrides.agent ?? stringValue(raw.agent, undefined), "agent"),
     baselineSkills: baselineSkills.map((skill) => resolveFrom(baseDir, skill)),
     proposedSkills: proposedSkills.map((skill) => resolveFrom(baseDir, skill)),
+    delivery: overrides.delivery ?? deliveryValue(raw.delivery, "inline"),
     model: overrides.model ?? requiredString(raw.model, "model"),
     runs: overrides.runs ?? numberValue(raw.runs, 5),
     timeoutMs: overrides.timeoutMs ?? numberValue(raw.timeoutMs, 600_000),
@@ -169,6 +174,11 @@ function validateCompareConfig(config: CompareConfig): void {
   for (const evalCase of config.cases) {
     if (evalCase.runs !== undefined && evalCase.runs < 1) {
       throw new Error(`${evalCase.name}.runs must be at least 1`);
+    }
+  }
+  if (config.delivery === "install") {
+    if (config.tools === "" || config.cases.some((evalCase) => evalCase.tools === "")) {
+      throw new Error('delivery "install" needs tools enabled: skills are invoked via the Skill tool, so tools "" can never trigger them');
     }
   }
 }

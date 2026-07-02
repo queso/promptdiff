@@ -3,6 +3,7 @@ import { CliError, parseArgs, type FlagSpecs } from "./args";
 import { loadCompareConfig, type CompareOverrides } from "./engine/config";
 import { formatCompareSummary, runCompare } from "./engine/compare";
 import { prepareSandbox } from "./engine/sandbox";
+import { installSkills, type Delivery } from "./engine/skill-install";
 import { assembleSystemPrompt } from "./prompt";
 import { ClaudePrintRunner } from "./runner/claude-p";
 import type { RunMode, RunnerRunOptions } from "./types";
@@ -13,6 +14,7 @@ const DEFAULT_MAX_BUDGET_USD = 1;
 const runSpecs: FlagSpecs = {
   agent: { arity: "one" },
   skill: { arity: "one", repeat: true },
+  delivery: { arity: "one" },
   model: { arity: "one" },
   prompt: { arity: "one" },
   "prompt-file": { arity: "one" },
@@ -34,6 +36,7 @@ const compareSpecs: FlagSpecs = {
   proposed: { arity: "one", repeat: true },
   "baseline-skill": { arity: "one", repeat: true },
   "proposed-skill": { arity: "one", repeat: true },
+  delivery: { arity: "one" },
   model: { arity: "one" },
   runs: { arity: "one" },
   mode: { arity: "one" },
@@ -95,7 +98,12 @@ async function cmdRun(argv: string[]): Promise<void> {
   }
 
   const prompt = promptFromArgs(args.one("prompt"), args.one("prompt-file"));
-  const mode = modeFromString(args.one("mode") ?? "text");
+  const delivery = deliveryFromString(args.one("delivery") ?? "inline");
+  const mode = modeFromString(args.one("mode") ?? (delivery === "install" ? "artifact" : "text"));
+  const tools = args.one("tools") ?? (delivery === "install" ? "default" : defaultTools(mode));
+  if (delivery === "install" && tools === "") {
+    throw new CliError('--delivery install needs tools enabled: skills trigger via the Skill tool, so --tools "" can never fire them');
+  }
   const keepSandbox = args.has("keep-sandbox") || (mode === "artifact" && !args.has("clean-sandbox"));
   const sandbox = prepareSandbox({
     root: args.one("sandbox") ?? ".skill-eval/run",
@@ -105,20 +113,32 @@ async function cmdRun(argv: string[]): Promise<void> {
   });
 
   try {
-    const systemPrompt = assembleSystemPrompt(agent, args.many("skill"));
+    const systemPrompt = assembleSystemPrompt(agent, delivery === "install" ? [] : args.many("skill"));
+    if (delivery === "install") {
+      const { installed, warnings } = installSkills(args.many("skill"), sandbox.dir);
+      console.error(
+        `[skill-eval] installed skills: ${installed.map((skill) => skill.name).join(", ") || "(none)"}`,
+      );
+      for (const warning of warnings) {
+        console.error(`[skill-eval] WARNING: ${warning}`);
+      }
+    }
     const runOptions: RunnerRunOptions = {
       systemPrompt,
+      systemPromptMode: delivery === "install" ? "append" : "replace",
       userPrompt: prompt,
       model,
       cwd: sandbox.dir,
       addDirs: args.many("add-dir"),
-      tools: args.one("tools") ?? defaultTools(mode),
+      tools,
       timeoutMs: args.number("timeout-ms", DEFAULT_TIMEOUT_MS),
       maxBudgetUsd: args.number("max-budget-usd", DEFAULT_MAX_BUDGET_USD),
     };
 
     console.error(
-      `[skill-eval] system prompt: ${systemPrompt.length} chars (agent + ${args.many("skill").length} skill(s))`,
+      delivery === "install"
+        ? `[skill-eval] appended agent prompt: ${systemPrompt.length} chars (skills installed, not inlined)`
+        : `[skill-eval] system prompt: ${systemPrompt.length} chars (agent + ${args.many("skill").length} skill(s))`,
     );
     console.error(`[skill-eval] sandbox cwd: ${sandbox.dir}`);
 
@@ -146,6 +166,7 @@ async function cmdCompare(argv: string[]): Promise<number> {
     agent: args.one("agent"),
     baselineSkills: coalesceMany(args.many("baseline-skill"), args.many("baseline")),
     proposedSkills: coalesceMany(args.many("proposed-skill"), args.many("proposed")),
+    delivery: args.one("delivery") ? deliveryFromString(args.one("delivery")) : undefined,
     model: args.one("model"),
     runs: args.has("runs") ? args.number("runs", 0) : undefined,
     timeoutMs: args.has("timeout-ms") ? args.number("timeout-ms", DEFAULT_TIMEOUT_MS) : undefined,
@@ -183,6 +204,11 @@ function modeFromString(value: string | undefined): RunMode {
   throw new CliError("--mode must be either text or artifact");
 }
 
+function deliveryFromString(value: string | undefined): Delivery {
+  if (value === "inline" || value === "install") return value;
+  throw new CliError("--delivery must be either inline or install");
+}
+
 function defaultTools(mode: RunMode): string {
   return mode === "text" ? "" : "default";
 }
@@ -200,12 +226,21 @@ function runUsage(): string {
     "Runs one bounded Claude invocation. Use this to inspect whether one agent +",
     "skill set behaves roughly as expected before promoting the fixture to compare.",
     "",
-    "flags: --skill <SKILL.md>... --mode <text|artifact> --sandbox <dir> --seed <dir>",
-    "       --tools <tools|default|''> --timeout-ms <ms> --max-budget-usd <usd>",
+    "flags: --skill <SKILL.md|dir>... --delivery <inline|install> --mode <text|artifact>",
+    "       --sandbox <dir> --seed <dir> --tools <tools|default|''>",
+    "       --timeout-ms <ms> --max-budget-usd <usd>",
     "",
     "modes:",
     "  text      disables tools with --tools '' and grades only the final output manually",
     "  artifact  runs Claude in a fresh sandbox cwd with default tools enabled",
+    "",
+    "delivery:",
+    "  inline    (default) skill bodies are inlined into a replaced system prompt —",
+    "            controlled compliance testing of skill text the model already sees",
+    "  install   skill dirs are copied to <sandbox>/.claude/skills/<name> with",
+    "            frontmatter intact and the agent text is appended to the default",
+    "            system prompt — tests whether the registry description actually",
+    "            triggers the Skill invocation (implies --mode artifact + tools)",
   ].join("\n");
 }
 
@@ -217,6 +252,8 @@ function compareUsage(): string {
     "each run deterministically and compares pass rates.",
     "",
     "overrides: --agent <file.md> --baseline <SKILL.md>... --proposed <SKILL.md>...",
+    "           --delivery <inline|install> (install: skills land in the sandbox",
+    "           registry with frontmatter intact instead of being inlined)",
     "           --model <model> --runs <n> --sandbox <dir> --keep-sandbox",
     "           --mode <text|artifact> --tools <tools|default|''>",
     "           --timeout-ms <ms> --max-budget-usd <usd>",

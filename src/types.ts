@@ -11,6 +11,13 @@ export interface RunResult {
 
 export interface RunnerRunOptions {
   systemPrompt: string;
+  /**
+   * "replace" (default) swaps the whole system prompt via --system-prompt-file —
+   * right for controlled inline evals. "append" layers the text on top of the
+   * default harness prompt via --append-system-prompt, preserving harness
+   * machinery like the skill registry; required for install-delivery evals.
+   */
+  systemPromptMode?: "replace" | "append";
   userPrompt: string;
   model: string;
   cwd: string;

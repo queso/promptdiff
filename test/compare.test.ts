@@ -36,6 +36,7 @@ test("runCompare verifies target improvement and regression preservation", async
       agent,
       baselineSkills: [baseline],
       proposedSkills: [proposed],
+      delivery: "inline",
       model: "sonnet",
       runs: 2,
       timeoutMs: 1_000,

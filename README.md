@@ -170,6 +170,40 @@ Useful overrides:
 must not fully pass and proposed must improve the pass rate. For regression
 scenarios, proposed must not fall below baseline.
 
+## Delivery: inline vs install
+
+Two ways to put the skill under test in front of the agent, for two different
+questions:
+
+- `inline` (default): skill bodies are inlined into a replaced system prompt,
+  frontmatter stripped. Tests **compliance** — given the skill text is in
+  context, does behavior follow it? Fully controlled, works with `--tools ""`.
+- `install`: skill directories are copied to `<sandbox>/.claude/skills/<name>`
+  with frontmatter intact, and the agent text is appended to the **default**
+  system prompt (`--append-system-prompt`) so the harness's skill registry
+  stays active. Tests **invocation** — does the frontmatter description get
+  the skill triggered at all? Requires tools (the Skill tool does the
+  triggering); implies `--mode artifact`.
+
+```bash
+./skill-eval run \
+  --agent ./agents/probe.md \
+  --skill ../Cortex/skills/cortex \
+  --delivery install \
+  --model sonnet \
+  --prompt "Where should this app be deployed?"
+```
+
+In a scenario file, set top-level `"delivery": "install"` and point
+`baselineSkills`/`proposedSkills` at skill *directories* (or their SKILL.md;
+the parent directory is copied either way). Each run gets a fresh install in
+its own sandbox.
+
+Caveat: a user-level skill with the same name (`~/.claude/skills/<name>` or
+`$CLAUDE_CONFIG_DIR/skills/<name>`) loads in every run of both arms and
+contaminates the comparison. skill-eval warns when it detects this; remove or
+rename the user-level copy before comparing.
+
 ## Graders
 
 Text grader:

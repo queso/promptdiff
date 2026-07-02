@@ -3,6 +3,7 @@ import type { Runner, RunnerRunOptions, RunResult } from "../types";
 import type { CompareConfig, EvalCaseConfig } from "./config";
 import { gradeRun, type GradeResult } from "./grader";
 import { prepareSandbox } from "./sandbox";
+import { installSkills } from "./skill-install";
 
 export interface ArmRunSummary {
   run: number;
@@ -47,8 +48,11 @@ export interface CompareRunOptions {
 
 export async function runCompare(options: CompareRunOptions): Promise<CompareSummary> {
   const { config, runner, onProgress } = options;
-  const baselinePrompt = assembleSystemPrompt(config.agent, config.baselineSkills);
-  const proposedPrompt = assembleSystemPrompt(config.agent, config.proposedSkills);
+  // Install delivery keeps skill text out of the system prompt entirely — the
+  // arms differ only by which skill directory lands in the sandbox registry.
+  const inline = config.delivery !== "install";
+  const baselinePrompt = assembleSystemPrompt(config.agent, inline ? config.baselineSkills : []);
+  const proposedPrompt = assembleSystemPrompt(config.agent, inline ? config.proposedSkills : []);
   const cases: CaseSummary[] = [];
 
   for (const evalCase of config.cases) {
@@ -124,6 +128,7 @@ async function runArm(
 ): Promise<ArmSummary> {
   const runs = evalCase.runs ?? config.runs;
   const summaries: ArmRunSummary[] = [];
+  const armSkills = arm === "baseline" ? config.baselineSkills : config.proposedSkills;
 
   for (let index = 0; index < runs; index += 1) {
     const sandbox = prepareSandbox({
@@ -135,6 +140,15 @@ async function runArm(
 
     try {
       onProgress?.(`  ${arm} run ${index + 1}/${runs}`);
+      if (config.delivery === "install") {
+        const { installed, warnings } = installSkills(armSkills, sandbox.dir);
+        if (index === 0) {
+          onProgress?.(`  ${arm} installed skills: ${installed.map((skill) => skill.name).join(", ")}`);
+          for (const warning of warnings) {
+            onProgress?.(`  WARNING: ${warning}`);
+          }
+        }
+      }
       const run = await runner.run(buildRunnerOptions(config, evalCase, systemPrompt, sandbox.dir));
       const grade = await gradeRun(evalCase.grader, { run, sandboxDir: sandbox.dir });
       summaries.push(toArmRunSummary(index + 1, run, grade, sandbox.dir));
@@ -162,13 +176,17 @@ function buildRunnerOptions(
   cwd: string,
 ): RunnerRunOptions {
   const mode = evalCase.mode ?? config.mode ?? inferMode(evalCase);
+  // Install delivery always needs tools (the Skill tool does the triggering),
+  // even when the grader is text-only and inline delivery would disable them.
+  const fallbackTools = config.delivery === "install" ? "default" : defaultTools(mode);
   return {
     systemPrompt,
+    systemPromptMode: config.delivery === "install" ? "append" : "replace",
     userPrompt: evalCase.prompt,
     model: config.model,
     cwd,
     addDirs: [...config.addDirs, ...evalCase.addDirs],
-    tools: evalCase.tools ?? config.tools ?? defaultTools(mode),
+    tools: evalCase.tools ?? config.tools ?? fallbackTools,
     timeoutMs: config.timeoutMs,
     maxBudgetUsd: config.maxBudgetUsd,
   };

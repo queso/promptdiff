@@ -25,6 +25,42 @@ test("buildClaudeArgs uses a system prompt file, budget, tools, and add-dir", ()
   expect(args).toContain("/tmp/extra-b");
 });
 
+test("buildClaudeArgs append mode layers on the default prompt instead of replacing it", () => {
+  const args = buildClaudeArgs({
+    systemPrompt: "agent persona",
+    systemPromptMode: "append",
+    systemPromptFile: "/tmp/system.md",
+    userPrompt: "do work",
+    model: "sonnet",
+    cwd: "/tmp/sandbox",
+    addDirs: [],
+    tools: "default",
+    timeoutMs: 1_000,
+    maxBudgetUsd: 0.25,
+  });
+
+  // Replacing the system prompt would strip harness machinery like the skill
+  // registry — the very thing install-delivery evals measure.
+  expect(args).toContain("--append-system-prompt");
+  expect(args).toContain("agent persona");
+  expect(args).not.toContain("--system-prompt-file");
+
+  const empty = buildClaudeArgs({
+    systemPrompt: "   ",
+    systemPromptMode: "append",
+    systemPromptFile: "/tmp/system.md",
+    userPrompt: "do work",
+    model: "sonnet",
+    cwd: "/tmp/sandbox",
+    addDirs: [],
+    tools: "default",
+    timeoutMs: 1_000,
+    maxBudgetUsd: 0.25,
+  });
+  expect(empty).not.toContain("--append-system-prompt");
+  expect(empty).not.toContain("--system-prompt-file");
+});
+
 test("buildClaudeArgs sets acceptEdits so artifact-mode agents can write outputs", () => {
   const args = buildClaudeArgs({
     systemPrompt: "system",

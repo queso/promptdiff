@@ -55,8 +55,10 @@ The runner captures:
 
 ## 4. A/B Variable
 
-Skill variants are inlined into the system prompt instead of being loaded by the
-Skill tool at runtime:
+Two delivery modes, matching two distinct questions about a skill edit:
+
+**`inline` (default) — compliance.** Skill variants are inlined into the system
+prompt instead of being loaded by the Skill tool at runtime:
 
 ```text
 system prompt = agent body with frontmatter stripped
@@ -65,7 +67,23 @@ system prompt = agent body with frontmatter stripped
 
 That keeps the comparison controlled. The baseline and proposed arms differ by
 the skill text under test, not by whichever skill version happens to be
-installed on disk.
+installed on disk. The limitation is the flip side of the control: an inlined
+skill is always in context, so inline evals cannot measure whether the skill
+would have been *invoked* — and frontmatter (including the `description` that
+drives model-invoked triggering) is stripped entirely.
+
+**`install` — invocation.** The skill directory is copied, frontmatter intact,
+into `<sandbox>/.claude/skills/<name>`, where headless Claude's project-skill
+discovery registers it. The agent body is delivered with
+`--append-system-prompt` rather than `--system-prompt-file`, because replacing
+the system prompt would strip the harness machinery (skill registry, Skill
+tool) that this mode exists to exercise. Arms differ only by which variant
+directory lands in the per-run sandbox registry. This is the mode for A/B
+testing description/trigger wording — the "does it fire at all" question. It
+requires tools and is incompatible with `--tools ""`.
+
+Known contamination source in install mode: same-named user-level skills load
+in both arms; the installer warns when it detects one.
 
 ## 5. Scenario Format
 

@@ -12,11 +12,17 @@ interface ClaudeJsonResult {
 }
 
 export function buildClaudeArgs(options: RunnerRunOptions & { systemPromptFile: string }): string[] {
+  const systemPromptArgs =
+    options.systemPromptMode === "append"
+      ? options.systemPrompt.trim().length > 0
+        ? ["--append-system-prompt", options.systemPrompt]
+        : []
+      : ["--system-prompt-file", options.systemPromptFile];
+
   const args = [
     "-p",
     options.userPrompt,
-    "--system-prompt-file",
-    options.systemPromptFile,
+    ...systemPromptArgs,
     "--output-format",
     "json",
     "--model",
