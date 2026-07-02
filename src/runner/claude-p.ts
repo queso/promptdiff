@@ -26,6 +26,12 @@ export function buildClaudeArgs(options: RunnerRunOptions & { systemPromptFile: 
     "--max-budget-usd",
     String(options.maxBudgetUsd),
     "--no-session-persistence",
+    // Headless denies file edits without an explicit permission mode, which breaks
+    // artifact-mode agents that must write outputs (e.g. findings.json) into the
+    // sandbox. acceptEdits is safe: text mode passes --tools "" so nothing can write,
+    // and artifact mode's cwd IS the disposable sandbox.
+    "--permission-mode",
+    "acceptEdits",
   ];
 
   if (options.addDirs.length > 0) {
