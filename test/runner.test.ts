@@ -61,6 +61,38 @@ test("buildClaudeArgs append mode layers on the default prompt instead of replac
   expect(empty).not.toContain("--system-prompt-file");
 });
 
+test("buildClaudeArgs grants explicit tool lists via --allowedTools", () => {
+  const listArgs = buildClaudeArgs({
+    systemPrompt: "system",
+    systemPromptFile: "/tmp/system.md",
+    userPrompt: "do work",
+    model: "sonnet",
+    cwd: "/tmp/sandbox",
+    addDirs: [],
+    tools: "Bash,Read,Grep",
+    timeoutMs: 1_000,
+    maxBudgetUsd: 0.25,
+  });
+  // --tools alone leaves Bash permission-denied in headless mode.
+  expect(listArgs).toContain("--allowedTools");
+  expect(listArgs.filter((arg) => arg === "Bash,Read,Grep")).toHaveLength(2);
+
+  for (const tools of ["", "default"]) {
+    const args = buildClaudeArgs({
+      systemPrompt: "system",
+      systemPromptFile: "/tmp/system.md",
+      userPrompt: "do work",
+      model: "sonnet",
+      cwd: "/tmp/sandbox",
+      addDirs: [],
+      tools,
+      timeoutMs: 1_000,
+      maxBudgetUsd: 0.25,
+    });
+    expect(args).not.toContain("--allowedTools");
+  }
+});
+
 test("buildClaudeArgs sets acceptEdits so artifact-mode agents can write outputs", () => {
   const args = buildClaudeArgs({
     systemPrompt: "system",

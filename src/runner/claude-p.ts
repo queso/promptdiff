@@ -19,6 +19,14 @@ export function buildClaudeArgs(options: RunnerRunOptions & { systemPromptFile: 
         : []
       : ["--system-prompt-file", options.systemPromptFile];
 
+  // "--tools" controls availability only; an explicit tool list still hits
+  // permission denials in headless mode (Bash especially). Granting the same
+  // list via --allowedTools makes list-mode evals actually able to act.
+  const toolArgs =
+    options.tools === "" || options.tools === "default"
+      ? ["--tools", options.tools]
+      : ["--tools", options.tools, "--allowedTools", options.tools];
+
   const args = [
     "-p",
     options.userPrompt,
@@ -27,8 +35,7 @@ export function buildClaudeArgs(options: RunnerRunOptions & { systemPromptFile: 
     "json",
     "--model",
     options.model,
-    "--tools",
-    options.tools,
+    ...toolArgs,
     "--max-budget-usd",
     String(options.maxBudgetUsd),
     "--no-session-persistence",
