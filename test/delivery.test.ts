@@ -100,6 +100,18 @@ test("scenario files parse delivery and reject install with disabled tools", () 
     // The JSON parser already rejects a literal empty tools string; the CLI
     // --tools "" override is the path that can smuggle it in.
     expect(() => loadCompareConfig(okPath, { tools: "" })).toThrow(/tools enabled/);
+
+    const badRegexPath = join(dir, "bad-regex.json");
+    writeFileSync(
+      badRegexPath,
+      JSON.stringify({
+        ...base,
+        scenarios: [{ name: "t", kind: "target", prompt: "p", grader: { type: "text", regex: ["(?i)x"] } }],
+      }),
+      "utf8",
+    );
+    // Invalid patterns must fail at load time, not after a paid run.
+    expect(() => loadCompareConfig(badRegexPath)).toThrow(/not a valid JS regex/);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

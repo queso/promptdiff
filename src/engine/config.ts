@@ -196,11 +196,21 @@ function graderValue(value: unknown, scenarioName: string): GraderSpec {
     throw new Error(`${scenarioName}.grader must be an object`);
   }
   if (value.type === "text") {
+    const regex = stringArray(value.regex, `${scenarioName}.grader.regex`);
+    for (const pattern of regex) {
+      try {
+        new RegExp(pattern);
+      } catch (error) {
+        const reason = error instanceof Error ? error.message : String(error);
+        // Validate up front — a bad pattern must fail here, not after a paid run.
+        throw new Error(`${scenarioName}.grader.regex ${JSON.stringify(pattern)} is not a valid JS regex (${reason}); note inline flags like (?i) are unsupported`);
+      }
+    }
     return {
       type: "text",
       contains: stringArray(value.contains, `${scenarioName}.grader.contains`),
       notContains: stringArray(value.notContains, `${scenarioName}.grader.notContains`),
-      regex: stringArray(value.regex, `${scenarioName}.grader.regex`),
+      regex,
     };
   }
   if (value.type === "command") {
