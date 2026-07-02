@@ -1,0 +1,42 @@
+{
+  "name": "@the-ai-team/skill-eval",
+  "version": "0.0.1",
+  "description": "A test-running harness for AI agent prompt and skill changes via headless claude -p.",
+  "type": "module",
+  "packageManager": "bun@1.3.11",
+  "bin": {
+    "skill-eval": "./skill-eval"
+  },
+  "files": [
+    "skill-eval",
+    "src",
+    "README.md",
+    "SPEC.md"
+  ],
+  "scripts": {
+    "eval": "./skill-eval",
+    "test": "bun test",
+    "typecheck": "tsc --noEmit",
+    "check": "bun test && tsc --noEmit",
+    "prepublishOnly": "bun run check"
+  },
+  "engines": {
+    "bun": ">=1.0.0"
+  },
+  "keywords": [
+    "ai",
+    "agents",
+    "evals",
+    "prompts",
+    "claude",
+    "bun"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "devDependencies": {
+    "@types/bun": "latest",
+    "typescript": "latest"
+  },
+  "license": "MIT"
+}

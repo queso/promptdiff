@@ -1,0 +1,227 @@
+import { assembleSystemPrompt } from "../prompt";
+import type { Runner, RunnerRunOptions, RunResult } from "../types";
+import type { CompareConfig, EvalCaseConfig } from "./config";
+import { gradeRun, type GradeResult } from "./grader";
+import { prepareSandbox } from "./sandbox";
+
+export interface ArmRunSummary {
+  run: number;
+  pass: boolean;
+  grade: GradeResult;
+  costUsd: number;
+  turns: number;
+  durationMs: number;
+  sandboxDir: string;
+  output: string;
+}
+
+export interface ArmSummary {
+  name: "baseline" | "proposed";
+  passes: number;
+  totalRuns: number;
+  passRate: number;
+  totalCostUsd: number;
+  runs: ArmRunSummary[];
+}
+
+export interface CaseSummary {
+  name: string;
+  kind: "target" | "regression";
+  baseline: ArmSummary;
+  proposed: ArmSummary;
+  assertions: string[];
+}
+
+export interface CompareSummary {
+  name: string;
+  cases: CaseSummary[];
+  failedAssertions: string[];
+  totalCostUsd: number;
+}
+
+export interface CompareRunOptions {
+  config: CompareConfig;
+  runner: Runner;
+  onProgress?: (message: string) => void;
+}
+
+export async function runCompare(options: CompareRunOptions): Promise<CompareSummary> {
+  const { config, runner, onProgress } = options;
+  const baselinePrompt = assembleSystemPrompt(config.agent, config.baselineSkills);
+  const proposedPrompt = assembleSystemPrompt(config.agent, config.proposedSkills);
+  const cases: CaseSummary[] = [];
+
+  for (const evalCase of config.cases) {
+    onProgress?.(`scenario ${evalCase.name} (${evalCase.kind})`);
+    const baseline = await runArm(config, evalCase, "baseline", baselinePrompt, runner, onProgress);
+    const proposed = await runArm(config, evalCase, "proposed", proposedPrompt, runner, onProgress);
+    cases.push({
+      name: evalCase.name,
+      kind: evalCase.kind,
+      baseline,
+      proposed,
+      assertions: evaluateAssertions(evalCase, baseline, proposed),
+    });
+  }
+
+  const failedAssertions = cases.flatMap((caseSummary) =>
+    caseSummary.assertions.map((assertion) => `${caseSummary.name}: ${assertion}`),
+  );
+  const totalCostUsd = cases.reduce(
+    (sum, caseSummary) => sum + caseSummary.baseline.totalCostUsd + caseSummary.proposed.totalCostUsd,
+    0,
+  );
+
+  return {
+    name: config.name,
+    cases,
+    failedAssertions,
+    totalCostUsd,
+  };
+}
+
+export function formatCompareSummary(summary: CompareSummary): string {
+  const lines = [`skill-eval compare: ${summary.name}`];
+
+  for (const caseSummary of summary.cases) {
+    const deltaPass = caseSummary.proposed.passRate - caseSummary.baseline.passRate;
+    const deltaCost = caseSummary.proposed.totalCostUsd - caseSummary.baseline.totalCostUsd;
+    lines.push(
+      "",
+      `${caseSummary.name} (${caseSummary.kind})`,
+      `  baseline: ${caseSummary.baseline.passes}/${caseSummary.baseline.totalRuns} pass (${formatPct(caseSummary.baseline.passRate)}) | $${caseSummary.baseline.totalCostUsd.toFixed(4)}`,
+      `  proposed: ${caseSummary.proposed.passes}/${caseSummary.proposed.totalRuns} pass (${formatPct(caseSummary.proposed.passRate)}) | $${caseSummary.proposed.totalCostUsd.toFixed(4)}`,
+      `  delta: ${deltaPass >= 0 ? "+" : ""}${formatPct(deltaPass)} pass | ${deltaCost >= 0 ? "+" : ""}$${deltaCost.toFixed(4)}`,
+    );
+
+    if (caseSummary.assertions.length > 0) {
+      for (const assertion of caseSummary.assertions) {
+        lines.push(`  FAIL: ${assertion}`);
+      }
+    } else {
+      lines.push("  PASS: assertions satisfied");
+    }
+  }
+
+  lines.push("", `total cost: $${summary.totalCostUsd.toFixed(4)}`);
+  if (summary.failedAssertions.length > 0) {
+    lines.push("failed assertions:");
+    for (const assertion of summary.failedAssertions) {
+      lines.push(`  - ${assertion}`);
+    }
+  }
+
+  return lines.join("\n");
+}
+
+async function runArm(
+  config: CompareConfig,
+  evalCase: EvalCaseConfig,
+  arm: "baseline" | "proposed",
+  systemPrompt: string,
+  runner: Runner,
+  onProgress?: (message: string) => void,
+): Promise<ArmSummary> {
+  const runs = evalCase.runs ?? config.runs;
+  const summaries: ArmRunSummary[] = [];
+
+  for (let index = 0; index < runs; index += 1) {
+    const sandbox = prepareSandbox({
+      root: config.sandboxRoot,
+      seed: evalCase.seed ?? config.sandboxSeed,
+      prefix: `${evalCase.name}-${arm}-${index + 1}`,
+      keep: config.keepSandbox,
+    });
+
+    try {
+      onProgress?.(`  ${arm} run ${index + 1}/${runs}`);
+      const run = await runner.run(buildRunnerOptions(config, evalCase, systemPrompt, sandbox.dir));
+      const grade = await gradeRun(evalCase.grader, { run, sandboxDir: sandbox.dir });
+      summaries.push(toArmRunSummary(index + 1, run, grade, sandbox.dir));
+    } finally {
+      sandbox.cleanup();
+    }
+  }
+
+  const passes = summaries.filter((summary) => summary.pass).length;
+  const totalCostUsd = summaries.reduce((sum, summary) => sum + summary.costUsd, 0);
+  return {
+    name: arm,
+    passes,
+    totalRuns: runs,
+    passRate: passes / runs,
+    totalCostUsd,
+    runs: summaries,
+  };
+}
+
+function buildRunnerOptions(
+  config: CompareConfig,
+  evalCase: EvalCaseConfig,
+  systemPrompt: string,
+  cwd: string,
+): RunnerRunOptions {
+  const mode = evalCase.mode ?? config.mode ?? inferMode(evalCase);
+  return {
+    systemPrompt,
+    userPrompt: evalCase.prompt,
+    model: config.model,
+    cwd,
+    addDirs: [...config.addDirs, ...evalCase.addDirs],
+    tools: evalCase.tools ?? config.tools ?? defaultTools(mode),
+    timeoutMs: config.timeoutMs,
+    maxBudgetUsd: config.maxBudgetUsd,
+  };
+}
+
+function toArmRunSummary(
+  runNumber: number,
+  run: RunResult,
+  grade: GradeResult,
+  sandboxDir: string,
+): ArmRunSummary {
+  return {
+    run: runNumber,
+    pass: grade.pass,
+    grade,
+    costUsd: run.costUsd,
+    turns: run.turns,
+    durationMs: run.durationMs,
+    sandboxDir,
+    output: run.output,
+  };
+}
+
+function evaluateAssertions(
+  evalCase: EvalCaseConfig,
+  baseline: ArmSummary,
+  proposed: ArmSummary,
+): string[] {
+  if (evalCase.kind === "target") {
+    const failures = [];
+    if (baseline.passRate >= 1) {
+      failures.push("baseline fully passed; the target gap was not reproduced");
+    }
+    if (proposed.passRate <= baseline.passRate) {
+      failures.push("proposed did not improve the target pass rate");
+    }
+    return failures;
+  }
+
+  if (proposed.passRate < baseline.passRate) {
+    return ["proposed regressed below baseline pass rate"];
+  }
+  return [];
+}
+
+function inferMode(evalCase: EvalCaseConfig): "text" | "artifact" {
+  return evalCase.grader.type === "command" ? "artifact" : "text";
+}
+
+function defaultTools(mode: "text" | "artifact"): string {
+  return mode === "text" ? "" : "default";
+}
+
+function formatPct(value: number): string {
+  return `${(value * 100).toFixed(0)}%`;
+}
