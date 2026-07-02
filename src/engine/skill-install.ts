@@ -68,6 +68,15 @@ export function installSkills(
         `user-level skill "${skill.name}" exists at ${join(userSkillsDir, skill.name)} and will also load in both arms — remove or rename it for a clean comparison`,
       );
     }
+
+    // Project skills with over-limit descriptions are silently dropped from the
+    // registry — the arm then runs skill-less and scores 0 for the wrong reason.
+    const descriptionLength = skillDescriptionLength(join(skill.dir, "SKILL.md"));
+    if (descriptionLength > MAX_DESCRIPTION_CHARS) {
+      warnings.push(
+        `skill "${skill.name}" has a ${descriptionLength}-char description (limit ${MAX_DESCRIPTION_CHARS}) — Claude Code drops over-limit project skills silently, so this arm would run without it`,
+      );
+    }
   }
 
   return { installed, warnings };
@@ -77,6 +86,16 @@ export function deliveryValue(value: unknown, fallback: Delivery): Delivery {
   if (value === undefined) return fallback;
   if (value === "inline" || value === "install") return value;
   throw new Error(`delivery must be "inline" or "install"`);
+}
+
+const MAX_DESCRIPTION_CHARS = 1024;
+
+function skillDescriptionLength(skillFile: string): number {
+  const content = readFileSync(skillFile, "utf8");
+  const frontmatter = content.match(/^---[ \t]*(?:\r?\n)([\s\S]*?)(?:\r?\n)---/);
+  if (!frontmatter) return 0;
+  const description = frontmatter[1].match(/^description:\s*(.+)$/m);
+  return description ? description[1].length : 0;
 }
 
 function skillNameFrom(skillFile: string): string | undefined {

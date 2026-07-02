@@ -81,6 +81,25 @@ test("installSkills warns on user-level skill name collisions and rejects duplic
   }
 });
 
+test("installSkills warns when a description exceeds the registry limit", () => {
+  const root = mkdtempSync(join(tmpdir(), "skill-install-test-"));
+  try {
+    const dir = join(root, "long-desc");
+    mkdirSync(dir, { recursive: true });
+    const longDescription = "x".repeat(1100);
+    writeFileSync(join(dir, "SKILL.md"), `---\nname: verbose\ndescription: ${longDescription}\n---\n# Body\n`, "utf8");
+    const sandbox = join(root, "sandbox");
+    mkdirSync(sandbox);
+
+    const result = installSkills([dir], sandbox, join(root, "no-user-skills"));
+    expect(result.warnings).toHaveLength(1);
+    expect(result.warnings[0]).toContain("1100-char description");
+    expect(result.warnings[0]).toContain("drops over-limit project skills");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("deliveryValue validates the delivery axis", () => {
   expect(deliveryValue(undefined, "inline")).toBe("inline");
   expect(deliveryValue("install", "inline")).toBe("install");
