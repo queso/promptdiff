@@ -18,7 +18,7 @@ function makeSkillDir(root: string, dirName: string, name: string, marker: strin
 }
 
 test("install delivery puts arm skills in each sandbox registry and keeps them out of the prompt", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "skill-eval-delivery-test-"));
+  const dir = mkdtempSync(join(tmpdir(), "promptdiff-delivery-test-"));
   try {
     const agent = join(dir, "agent.md");
     writeFileSync(agent, "Agent persona", "utf8");
@@ -76,7 +76,7 @@ test("install delivery puts arm skills in each sandbox registry and keeps them o
 });
 
 test("scenario files parse delivery and reject install with disabled tools", () => {
-  const dir = mkdtempSync(join(tmpdir(), "skill-eval-delivery-config-"));
+  const dir = mkdtempSync(join(tmpdir(), "promptdiff-delivery-config-"));
   try {
     writeFileSync(join(dir, "agent.md"), "Agent", "utf8");
     makeSkillDir(dir, "baseline-skill", "cortex", "b");

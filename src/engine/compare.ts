@@ -85,7 +85,7 @@ export async function runCompare(options: CompareRunOptions): Promise<CompareSum
 }
 
 export function formatCompareSummary(summary: CompareSummary): string {
-  const lines = [`skill-eval compare: ${summary.name}`];
+  const lines = [`promptdiff compare: ${summary.name}`];
 
   for (const caseSummary of summary.cases) {
     const deltaPass = caseSummary.proposed.passRate - caseSummary.baseline.passRate;

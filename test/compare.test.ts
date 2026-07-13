@@ -7,7 +7,7 @@ import type { CompareConfig } from "../src/engine/config";
 import type { Runner, RunnerRunOptions } from "../src/types";
 
 test("runCompare verifies target improvement and regression preservation", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "skill-eval-compare-test-"));
+  const dir = mkdtempSync(join(tmpdir(), "promptdiff-compare-test-"));
   try {
     const agent = join(dir, "agent.md");
     const baseline = join(dir, "baseline.md");

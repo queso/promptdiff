@@ -8,7 +8,7 @@ prompt, artifact mode, command grader counting planted holes, 3 runs/arm.
 ## What worked (keep these)
 
 - **The gap-must-exist assertion earned its keep on run one.** First fixture put the primary
-  sources inside the sandbox; baseline passed 3/3 and skill-eval FAILED the comparison with
+  sources inside the sandbox; baseline passed 3/3 and promptdiff FAILED the comparison with
   "baseline fully passed; the target gap was not reproduced." Without that assertion we'd have
   shipped a checker validated by a test that couldn't fail. This is the tool's core value and
   it fired exactly as designed.

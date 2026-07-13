@@ -3,7 +3,7 @@
   "configVersion": 1,
   "workspaces": {
     "": {
-      "name": "@the-ai-team/skill-eval",
+      "name": "@the-ai-team/promptdiff",
       "devDependencies": {
         "@types/bun": "latest",
         "typescript": "latest",

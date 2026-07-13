@@ -1,4 +1,4 @@
-# skill-eval - Design Spec
+# promptdiff - Design Spec
 
 Status: early implementation. The original spike proved the `claude -p`
 mechanism; the current repo now contains a real `run` command, a scenario-driven
@@ -12,7 +12,7 @@ enforcement hooks. The chronic failure mode is that proposed edits are shipped
 on faith or never shipped at all because there is no cheap proof that the edit
 changes behavior without damaging scenarios that already worked.
 
-`skill-eval` is the proof step between "we think this skill edit helps" and
+`promptdiff` is the proof step between "we think this skill edit helps" and
 "ship it." It does not collect findings, rank recurrence, or manage tuning
 rounds. Those can live in a larger system. This repo focuses on the eval harness.
 
@@ -25,7 +25,7 @@ The eval method should match the change being tested:
 | Enforcement hook | Deterministic unit test | 1 run, near-free |
 | Skill or agent prompt text | N-run stochastic A/B over pass rates | N x arms x per-run cost |
 
-`skill-eval` targets the second row. It runs one agent with baseline skill text
+`promptdiff` targets the second row. It runs one agent with baseline skill text
 and one agent with proposed skill text against the same scenario set.
 
 ## 3. Claude Runner
@@ -125,7 +125,7 @@ checks.
 ## 7. Architecture
 
 ```text
-skill-eval          # Bun executable shim
+promptdiff          # Bun executable shim
 src/cli.ts          # command parsing and user-facing orchestration
 src/args.ts         # strict local flag parser
 src/prompt.ts       # frontmatter stripping and prompt assembly

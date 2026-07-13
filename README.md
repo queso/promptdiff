@@ -1,6 +1,6 @@
-# skill-eval
+# promptdiff
 
-`skill-eval` is a small Bun CLI for testing whether an AI agent prompt or skill
+`promptdiff` is a small Bun CLI for testing whether an AI agent prompt or skill
 change actually changes behavior.
 
 It has two commands:
@@ -23,7 +23,7 @@ defect, a useful eval should show two things:
 2. the proposed instruction set improves the target case without regressing
    existing scenarios.
 
-`skill-eval compare` encodes that loop. It runs each arm several times, grades
+`promptdiff compare` encodes that loop. It runs each arm several times, grades
 each output deterministically, and reports pass rates and cost.
 
 ## Install
@@ -31,13 +31,13 @@ each output deterministically, and reports pass rates and cost.
 From npm:
 
 ```bash
-bun add -g @the-ai-team/skill-eval
+bun add -g @the-ai-team/promptdiff
 ```
 
 or:
 
 ```bash
-npm install -g @the-ai-team/skill-eval
+npm install -g @the-ai-team/promptdiff
 ```
 
 Runtime requirements:
@@ -50,7 +50,7 @@ claude --version
 Then run:
 
 ```bash
-skill-eval --help
+promptdiff --help
 ```
 
 From a checkout:
@@ -62,7 +62,7 @@ bun install
 Run from the repo:
 
 ```bash
-./skill-eval --help
+./promptdiff --help
 ```
 
 ## Safe Defaults
@@ -71,7 +71,7 @@ Paid model calls are bounded by default:
 
 - `--max-budget-usd 1` per Claude invocation
 - `--timeout-ms 600000` per Claude invocation
-- fresh sandbox working directories under `.skill-eval/`
+- fresh sandbox working directories under `.promptdiff/`
 - `run --mode text` disables tools with `--tools ""`
 - artifact mode uses the sandbox as Claude's actual `cwd`
 
@@ -84,7 +84,7 @@ Claude's default tools and keeps the sandbox for inspection. Pass
 Text-only eval:
 
 ```bash
-./skill-eval run \
+./promptdiff run \
   --agent ./agents/ba.md \
   --skill ./skills/defensive-coding/SKILL.md \
   --model sonnet \
@@ -94,13 +94,13 @@ Text-only eval:
 Artifact-producing eval:
 
 ```bash
-./skill-eval run \
+./promptdiff run \
   --agent ./agents/ba.md \
   --skill ./skills/defensive-coding/SKILL.md \
   --model sonnet \
   --mode artifact \
   --seed ./fixtures/wi-203 \
-  --sandbox .skill-eval/manual \
+  --sandbox .promptdiff/manual \
   --prompt "FIXTURE WI-203: Add GET /api/health returning {\"status\":\"ok\"}. Tests exist."
 ```
 
@@ -119,7 +119,7 @@ Create a scenario file:
   "maxBudgetUsd": 1,
   "timeoutMs": 600000,
   "sandbox": {
-    "root": ".skill-eval/runs",
+    "root": ".promptdiff/runs",
     "seed": "./fixtures/wi-203"
   },
   "scenarios": [
@@ -152,13 +152,13 @@ Paths inside a scenario file are resolved relative to that scenario file.
 Run it:
 
 ```bash
-./skill-eval compare --scenario ./scenarios/wi-203.json
+./promptdiff compare --scenario ./scenarios/wi-203.json
 ```
 
 Useful overrides:
 
 ```bash
-./skill-eval compare \
+./promptdiff compare \
   --scenario ./scenarios/wi-203.json \
   --baseline ./skills/current/SKILL.md \
   --proposed ./skills/proposed/SKILL.md \
@@ -186,7 +186,7 @@ questions:
   triggering); implies `--mode artifact`.
 
 ```bash
-./skill-eval run \
+./promptdiff run \
   --agent ./agents/probe.md \
   --skill ../Cortex/skills/cortex \
   --delivery install \
@@ -201,7 +201,7 @@ its own sandbox.
 
 Caveat: a user-level skill with the same name (`~/.claude/skills/<name>` or
 `$CLAUDE_CONFIG_DIR/skills/<name>`) loads in every run of both arms and
-contaminates the comparison. skill-eval warns when it detects this; remove or
+contaminates the comparison. promptdiff warns when it detects this; remove or
 rename the user-level copy before comparing.
 
 ## Graders

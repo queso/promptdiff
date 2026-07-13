@@ -5,7 +5,7 @@ import { expect, test } from "bun:test";
 import { loadCompareConfig } from "../src/engine/config";
 
 test("loadCompareConfig normalizes paths and rejects zero case runs", () => {
-  const dir = mkdtempSync(join(tmpdir(), "skill-eval-config-test-"));
+  const dir = mkdtempSync(join(tmpdir(), "promptdiff-config-test-"));
   try {
     writeFileSync(join(dir, "agent.md"), "Agent", "utf8");
     writeFileSync(join(dir, "baseline.md"), "Baseline", "utf8");

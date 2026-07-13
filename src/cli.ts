@@ -106,7 +106,7 @@ async function cmdRun(argv: string[]): Promise<void> {
   }
   const keepSandbox = args.has("keep-sandbox") || (mode === "artifact" && !args.has("clean-sandbox"));
   const sandbox = prepareSandbox({
-    root: args.one("sandbox") ?? ".skill-eval/run",
+    root: args.one("sandbox") ?? ".promptdiff/run",
     seed: args.one("seed"),
     prefix: "run",
     keep: keepSandbox,
@@ -117,10 +117,10 @@ async function cmdRun(argv: string[]): Promise<void> {
     if (delivery === "install") {
       const { installed, warnings } = installSkills(args.many("skill"), sandbox.dir);
       console.error(
-        `[skill-eval] installed skills: ${installed.map((skill) => skill.name).join(", ") || "(none)"}`,
+        `[promptdiff] installed skills: ${installed.map((skill) => skill.name).join(", ") || "(none)"}`,
       );
       for (const warning of warnings) {
-        console.error(`[skill-eval] WARNING: ${warning}`);
+        console.error(`[promptdiff] WARNING: ${warning}`);
       }
     }
     const runOptions: RunnerRunOptions = {
@@ -137,10 +137,10 @@ async function cmdRun(argv: string[]): Promise<void> {
 
     console.error(
       delivery === "install"
-        ? `[skill-eval] appended agent prompt: ${systemPrompt.length} chars (skills installed, not inlined)`
-        : `[skill-eval] system prompt: ${systemPrompt.length} chars (agent + ${args.many("skill").length} skill(s))`,
+        ? `[promptdiff] appended agent prompt: ${systemPrompt.length} chars (skills installed, not inlined)`
+        : `[promptdiff] system prompt: ${systemPrompt.length} chars (agent + ${args.many("skill").length} skill(s))`,
     );
-    console.error(`[skill-eval] sandbox cwd: ${sandbox.dir}`);
+    console.error(`[promptdiff] sandbox cwd: ${sandbox.dir}`);
 
     const result = await new ClaudePrintRunner().run(runOptions);
     console.log("\n--- OUTPUT ---\n" + result.output);
@@ -183,7 +183,7 @@ async function cmdCompare(argv: string[]): Promise<number> {
   const summary = await runCompare({
     config,
     runner: new ClaudePrintRunner(),
-    onProgress: (message) => console.error(`[skill-eval] ${message}`),
+    onProgress: (message) => console.error(`[promptdiff] ${message}`),
   });
 
   console.log(formatCompareSummary(summary));
@@ -221,7 +221,7 @@ function coalesceMany(primary: string[], fallback: string[]): string[] | undefin
 
 function runUsage(): string {
   return [
-    "usage: skill-eval run --agent <file.md> --model <model> (--prompt <text>|--prompt-file <file>) [flags]",
+    "usage: promptdiff run --agent <file.md> --model <model> (--prompt <text>|--prompt-file <file>) [flags]",
     "",
     "Runs one bounded Claude invocation. Use this to inspect whether one agent +",
     "skill set behaves roughly as expected before promoting the fixture to compare.",
@@ -246,7 +246,7 @@ function runUsage(): string {
 
 function compareUsage(): string {
   return [
-    "usage: skill-eval compare --scenario <scenario.json> [overrides]",
+    "usage: promptdiff compare --scenario <scenario.json> [overrides]",
     "",
     "Runs baseline and proposed skill sets against the same scenarios, then grades",
     "each run deterministically and compares pass rates.",
@@ -289,12 +289,12 @@ function compareUsage(): string {
 
 function generalUsage(): string {
   return [
-    "usage: skill-eval <run|compare> [flags]",
+    "usage: promptdiff <run|compare> [flags]",
     "",
     "commands:",
     "  run      one bounded Claude invocation with inlined skills",
     "  compare  N-run baseline-vs-proposed scenario comparison",
     "",
-    "use `skill-eval run --help` or `skill-eval compare --help` for command flags",
+    "use `promptdiff run --help` or `promptdiff compare --help` for command flags",
   ].join("\n");
 }

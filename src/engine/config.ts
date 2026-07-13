@@ -98,7 +98,7 @@ export function loadCompareConfig(path: string, overrides: CompareOverrides = {}
   const proposedSkills = overrides.proposedSkills ?? normalizeSkills(raw.proposedSkills ?? raw.proposed, "proposed");
 
   const rawSandbox = isRecord(raw.sandbox) ? raw.sandbox : {};
-  const sandboxRoot = overrides.sandboxRoot ?? resolveFrom(baseDir, stringValue(rawSandbox.root, ".skill-eval/runs"));
+  const sandboxRoot = overrides.sandboxRoot ?? resolveFrom(baseDir, stringValue(rawSandbox.root, ".promptdiff/runs"));
   const sandboxSeed =
     overrides.sandboxSeed ??
     optionalPath(baseDir, stringValue(rawSandbox.seed, undefined));
@@ -115,7 +115,7 @@ export function loadCompareConfig(path: string, overrides: CompareOverrides = {}
   }
 
   const config: CompareConfig = {
-    name: stringValue(raw.name, "skill-eval comparison"),
+    name: stringValue(raw.name, "promptdiff comparison"),
     agent: resolveRequired(baseDir, overrides.agent ?? stringValue(raw.agent, undefined), "agent"),
     baselineSkills: baselineSkills.map((skill) => resolveFrom(baseDir, skill)),
     proposedSkills: proposedSkills.map((skill) => resolveFrom(baseDir, skill)),

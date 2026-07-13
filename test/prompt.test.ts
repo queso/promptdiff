@@ -11,7 +11,7 @@ test("stripFrontmatter removes leading YAML frontmatter only", () => {
 });
 
 test("assembleSystemPrompt inlines stripped skills", () => {
-  const dir = mkdtempSync(join(tmpdir(), "skill-eval-prompt-test-"));
+  const dir = mkdtempSync(join(tmpdir(), "promptdiff-prompt-test-"));
   try {
     const agent = join(dir, "agent.md");
     const skill = join(dir, "SKILL.md");

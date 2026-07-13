@@ -58,7 +58,7 @@ export class ClaudePrintRunner implements Runner {
   constructor(private readonly claudeBin = "claude") {}
 
   async run(options: RunnerRunOptions): Promise<RunResult> {
-    const promptDir = mkdtempSync(join(tmpdir(), "skill-eval-prompt-"));
+    const promptDir = mkdtempSync(join(tmpdir(), "promptdiff-prompt-"));
     const systemPromptFile = join(promptDir, "system-prompt.md");
     writeFileSync(systemPromptFile, options.systemPrompt, "utf8");
 

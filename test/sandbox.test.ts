@@ -5,7 +5,7 @@ import { expect, test } from "bun:test";
 import { prepareSandbox } from "../src/engine/sandbox";
 
 test("prepareSandbox copies seed contents and cleans up by default", () => {
-  const dir = mkdtempSync(join(tmpdir(), "skill-eval-sandbox-test-"));
+  const dir = mkdtempSync(join(tmpdir(), "promptdiff-sandbox-test-"));
   const seed = join(dir, "seed");
   const root = join(dir, "runs");
   try {

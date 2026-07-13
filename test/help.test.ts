@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
 
 test("compare help documents runs, graders, and assertions", () => {
-  const result = Bun.spawnSync(["./skill-eval", "compare", "--help"], {
+  const result = Bun.spawnSync(["./promptdiff", "compare", "--help"], {
     cwd: process.cwd(),
     stdout: "pipe",
     stderr: "pipe",

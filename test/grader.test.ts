@@ -24,7 +24,7 @@ test("text grader checks required and forbidden text", async () => {
 });
 
 test("command grader runs inside the sandbox", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "skill-eval-grader-test-"));
+  const dir = mkdtempSync(join(tmpdir(), "promptdiff-grader-test-"));
   try {
     writeFileSync(join(dir, "artifact.txt"), "ok", "utf8");
     const grade = await gradeRun(
