@@ -1,18 +1,24 @@
 # promptdiff
 
-`promptdiff` is a small Bun CLI for testing whether an AI agent prompt or skill
-change actually changes behavior.
+`promptdiff` is a small Bun CLI for testing whether an LLM prompt or skill
+change actually changes behavior — with any model, not just Claude.
 
 It has two commands:
 
-- `run`: one headless Claude Code invocation with an agent file and optional
-  inlined skill files.
+- `run`: one bounded model invocation with an agent file and optional inlined
+  skill files.
 - `compare`: N-run baseline-vs-proposed comparison from a JSON scenario file,
   with deterministic text or command graders.
 
-The project is still early, but the CLI now performs real repeated comparisons.
-It shells out to `claude -p`; the provider-specific code is isolated in the
-runner.
+Model access goes through pluggable runners. Two ship today:
+
+- `claude-p` (default): headless Claude Code via `claude -p`. Supports tools,
+  sandboxed artifact runs, and skill-registry install testing.
+- `openai`: a single chat completion against any OpenAI-compatible endpoint
+  (OpenAI, ollama, vLLM, llama.cpp, OpenRouter, ...). Text-graded evals only.
+
+The project is still early, but the CLI performs real repeated comparisons;
+provider-specific code is isolated in `src/runner/`.
 
 ## Why it exists
 
@@ -44,7 +50,7 @@ Runtime requirements:
 
 ```bash
 bun --version
-claude --version
+claude --version   # only for the default claude-p runner
 ```
 
 Then run:
@@ -69,15 +75,52 @@ Run from the repo:
 
 Paid model calls are bounded by default:
 
-- `--max-budget-usd 1` per Claude invocation
-- `--timeout-ms 600000` per Claude invocation
+- `--max-budget-usd 1` per invocation (enforced by the claude-p runner; the
+  openai runner is a single completion per run, so cost is bounded by design)
+- `--timeout-ms 600000` per invocation
 - fresh sandbox working directories under `.promptdiff/`
 - `run --mode text` disables tools with `--tools ""`
-- artifact mode uses the sandbox as Claude's actual `cwd`
+- artifact mode uses the sandbox as the agent's actual `cwd`
 
 For artifact-producing runs, use `--mode artifact`; by default that enables
-Claude's default tools and keeps the sandbox for inspection. Pass
+the agent's default tools and keeps the sandbox for inspection. Pass
 `--clean-sandbox` to delete it after a single run.
+
+## Runners
+
+`--runner claude-p` (default) shells out to headless Claude Code and supports
+everything: tools, artifact mode, command graders, and `--delivery install`.
+
+`--runner openai` sends one chat completion to an OpenAI-compatible endpoint:
+
+```bash
+OPENAI_API_KEY=sk-... ./promptdiff run \
+  --runner openai \
+  --model gpt-4o-mini \
+  --agent ./agents/ba.md \
+  --skill ./skills/defensive-coding/SKILL.md \
+  --prompt "Explain how you would validate POST /api/items."
+```
+
+The endpoint defaults to `https://api.openai.com/v1` and can be changed with
+`--base-url` or `$OPENAI_BASE_URL` — point it at ollama, vLLM, llama.cpp,
+OpenRouter, or anything else that speaks `/chat/completions`. `$OPENAI_API_KEY`
+is sent as a bearer token when set; local servers work without one.
+
+```bash
+./promptdiff run \
+  --runner openai \
+  --base-url http://localhost:11434/v1 \
+  --model llama3.1 \
+  --agent ./agents/ba.md \
+  --prompt "Explain how you would validate POST /api/items."
+```
+
+The openai runner is text-only: no tools, no sandbox execution, no skill
+registry. Scenarios that need artifact mode, command graders, or install
+delivery are rejected up front — before any paid run — with an error telling
+you to use claude-p. In a scenario file, select it with top-level
+`"runner": "openai"` and optionally `"baseUrl": "..."`.
 
 ## Single Run
 
@@ -183,7 +226,9 @@ questions:
   system prompt (`--append-system-prompt`) so the harness's skill registry
   stays active. Tests **invocation** — does the frontmatter description get
   the skill triggered at all? Requires tools (the Skill tool does the
-  triggering); implies `--mode artifact`.
+  triggering); implies `--mode artifact`. Claude Code only (`--runner claude-p`):
+  it exercises that harness's skill registry, which plain completion endpoints
+  do not have.
 
 ```bash
 ./promptdiff run \
@@ -229,7 +274,9 @@ Command grader:
 }
 ```
 
-Command graders run inside the per-run sandbox.
+Command graders run inside the per-run sandbox. They grade files the agent
+wrote there, so they need a tool-capable runner (claude-p); text graders work
+with every runner.
 
 ## Development
 

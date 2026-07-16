@@ -5,8 +5,8 @@ import { formatCompareSummary, runCompare } from "./engine/compare";
 import { prepareSandbox } from "./engine/sandbox";
 import { installSkills, type Delivery } from "./engine/skill-install";
 import { assembleSystemPrompt } from "./prompt";
-import { ClaudePrintRunner } from "./runner/claude-p";
-import type { RunMode, RunnerRunOptions } from "./types";
+import { createRunner, RUNNER_NAMES, type RunnerName } from "./runner";
+import type { RunMode, Runner, RunnerRunOptions } from "./types";
 
 const DEFAULT_TIMEOUT_MS = 600_000;
 const DEFAULT_MAX_BUDGET_USD = 1;
@@ -15,6 +15,8 @@ const runSpecs: FlagSpecs = {
   agent: { arity: "one" },
   skill: { arity: "one", repeat: true },
   delivery: { arity: "one" },
+  runner: { arity: "one" },
+  "base-url": { arity: "one" },
   model: { arity: "one" },
   prompt: { arity: "one" },
   "prompt-file": { arity: "one" },
@@ -37,6 +39,8 @@ const compareSpecs: FlagSpecs = {
   "baseline-skill": { arity: "one", repeat: true },
   "proposed-skill": { arity: "one", repeat: true },
   delivery: { arity: "one" },
+  runner: { arity: "one" },
+  "base-url": { arity: "one" },
   model: { arity: "one" },
   runs: { arity: "one" },
   mode: { arity: "one" },
@@ -104,6 +108,13 @@ async function cmdRun(argv: string[]): Promise<void> {
   if (delivery === "install" && tools === "") {
     throw new CliError('--delivery install needs tools enabled: skills trigger via the Skill tool, so --tools "" can never fire them');
   }
+  const runner = runnerFromArgs(args.one("runner"), args.one("base-url"));
+  if (delivery === "install" && !runner.capabilities.skillRegistry) {
+    throw new CliError(`--delivery install needs a runner with a skill registry; runner "${runner.name}" has none (use claude-p)`);
+  }
+  if (tools !== "" && !runner.capabilities.sandboxTools) {
+    throw new CliError(`runner "${runner.name}" is text-only — artifact mode and tools need claude-p (or pass --tools "")`);
+  }
   const keepSandbox = args.has("keep-sandbox") || (mode === "artifact" && !args.has("clean-sandbox"));
   const sandbox = prepareSandbox({
     root: args.one("sandbox") ?? ".promptdiff/run",
@@ -142,7 +153,7 @@ async function cmdRun(argv: string[]): Promise<void> {
     );
     console.error(`[promptdiff] sandbox cwd: ${sandbox.dir}`);
 
-    const result = await new ClaudePrintRunner().run(runOptions);
+    const result = await runner.run(runOptions);
     console.log("\n--- OUTPUT ---\n" + result.output);
     console.log(
       `\n--- $${result.costUsd.toFixed(4)} | ${result.turns} turns | ${(result.durationMs / 1000).toFixed(1)}s | models: ${result.models.join(", ")} ---`,
@@ -167,6 +178,8 @@ async function cmdCompare(argv: string[]): Promise<number> {
     baselineSkills: coalesceMany(args.many("baseline-skill"), args.many("baseline")),
     proposedSkills: coalesceMany(args.many("proposed-skill"), args.many("proposed")),
     delivery: args.one("delivery") ? deliveryFromString(args.one("delivery")) : undefined,
+    runner: args.one("runner") ? runnerNameFromString(args.one("runner")) : undefined,
+    baseUrl: args.one("base-url"),
     model: args.one("model"),
     runs: args.has("runs") ? args.number("runs", 0) : undefined,
     timeoutMs: args.has("timeout-ms") ? args.number("timeout-ms", DEFAULT_TIMEOUT_MS) : undefined,
@@ -182,7 +195,7 @@ async function cmdCompare(argv: string[]): Promise<number> {
   const config = loadCompareConfig(scenario, overrides);
   const summary = await runCompare({
     config,
-    runner: new ClaudePrintRunner(),
+    runner: createRunner(config.runner, { baseUrl: config.baseUrl }),
     onProgress: (message) => console.error(`[promptdiff] ${message}`),
   });
 
@@ -209,6 +222,15 @@ function deliveryFromString(value: string | undefined): Delivery {
   throw new CliError("--delivery must be either inline or install");
 }
 
+function runnerNameFromString(value: string | undefined): RunnerName {
+  if (value === "claude-p" || value === "openai") return value;
+  throw new CliError(`--runner must be one of: ${RUNNER_NAMES.join(", ")}`);
+}
+
+function runnerFromArgs(name: string | undefined, baseUrl: string | undefined): Runner {
+  return createRunner(name === undefined ? "claude-p" : runnerNameFromString(name), { baseUrl });
+}
+
 function defaultTools(mode: RunMode): string {
   return mode === "text" ? "" : "default";
 }
@@ -223,16 +245,24 @@ function runUsage(): string {
   return [
     "usage: promptdiff run --agent <file.md> --model <model> (--prompt <text>|--prompt-file <file>) [flags]",
     "",
-    "Runs one bounded Claude invocation. Use this to inspect whether one agent +",
+    "Runs one bounded model invocation. Use this to inspect whether one agent +",
     "skill set behaves roughly as expected before promoting the fixture to compare.",
     "",
     "flags: --skill <SKILL.md|dir>... --delivery <inline|install> --mode <text|artifact>",
+    "       --runner <claude-p|openai> --base-url <url>",
     "       --sandbox <dir> --seed <dir> --tools <tools|default|''>",
     "       --timeout-ms <ms> --max-budget-usd <usd>",
     "",
+    "runners:",
+    "  claude-p  (default) headless Claude Code — supports tools, artifact mode,",
+    "            and install delivery",
+    "  openai    single chat completion against any OpenAI-compatible endpoint",
+    "            (text mode only); --base-url or $OPENAI_BASE_URL picks the server,",
+    "            $OPENAI_API_KEY is sent when set",
+    "",
     "modes:",
     "  text      disables tools with --tools '' and grades only the final output manually",
-    "  artifact  runs Claude in a fresh sandbox cwd with default tools enabled",
+    "  artifact  runs the agent in a fresh sandbox cwd with default tools enabled",
     "",
     "delivery:",
     "  inline    (default) skill bodies are inlined into a replaced system prompt —",
@@ -254,6 +284,8 @@ function compareUsage(): string {
     "overrides: --agent <file.md> --baseline <SKILL.md>... --proposed <SKILL.md>...",
     "           --delivery <inline|install> (install: skills land in the sandbox",
     "           registry with frontmatter intact instead of being inlined)",
+    "           --runner <claude-p|openai> --base-url <url> (openai: text-graded",
+    "           scenarios against any OpenAI-compatible endpoint)",
     "           --model <model> --runs <n> --sandbox <dir> --keep-sandbox",
     "           --mode <text|artifact> --tools <tools|default|''>",
     "           --timeout-ms <ms> --max-budget-usd <usd>",
@@ -263,8 +295,9 @@ function compareUsage(): string {
     "  --runs <n> overrides the scenario default. A case may also define its own runs.",
     "",
     "graders:",
-    "  text     checks Claude's final output with contains, notContains, and regex arrays",
+    "  text     checks the run's final output with contains, notContains, and regex arrays",
     "  command  runs a shell command inside the per-run sandbox and checks exit code",
+    "           (needs a tool-capable runner: claude-p)",
     "",
     "assertions:",
     "  target      baseline must not fully pass; proposed must beat baseline pass rate",
@@ -292,7 +325,7 @@ function generalUsage(): string {
     "usage: promptdiff <run|compare> [flags]",
     "",
     "commands:",
-    "  run      one bounded Claude invocation with inlined skills",
+    "  run      one bounded model invocation with inlined skills",
     "  compare  N-run baseline-vs-proposed scenario comparison",
     "",
     "use `promptdiff run --help` or `promptdiff compare --help` for command flags",

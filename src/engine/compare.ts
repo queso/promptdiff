@@ -48,6 +48,7 @@ export interface CompareRunOptions {
 
 export async function runCompare(options: CompareRunOptions): Promise<CompareSummary> {
   const { config, runner, onProgress } = options;
+  validateRunnerSupport(config, runner);
   // Install delivery keeps skill text out of the system prompt entirely — the
   // arms differ only by which skill directory lands in the sandbox registry.
   const inline = config.delivery !== "install";
@@ -118,6 +119,27 @@ export function formatCompareSummary(summary: CompareSummary): string {
   return lines.join("\n");
 }
 
+/**
+ * Rejects scenario demands the runner cannot honor — before any paid run,
+ * instead of mid-comparison or (worse) via a silently tool-less arm.
+ */
+export function validateRunnerSupport(config: CompareConfig, runner: Runner): void {
+  if (config.delivery === "install" && !runner.capabilities.skillRegistry) {
+    throw new Error(
+      `delivery "install" needs a runner with a skill registry; runner "${runner.name}" has none (use claude-p)`,
+    );
+  }
+  if (runner.capabilities.sandboxTools) return;
+  for (const evalCase of config.cases) {
+    if (effectiveTools(config, evalCase) !== "") {
+      throw new Error(
+        `runner "${runner.name}" is text-only, but scenario "${evalCase.name}" needs sandbox tools ` +
+          `(artifact mode, a command grader, or an explicit tools list) — use claude-p or make the scenario text-graded`,
+      );
+    }
+  }
+}
+
 async function runArm(
   config: CompareConfig,
   evalCase: EvalCaseConfig,
@@ -175,10 +197,6 @@ function buildRunnerOptions(
   systemPrompt: string,
   cwd: string,
 ): RunnerRunOptions {
-  const mode = evalCase.mode ?? config.mode ?? inferMode(evalCase);
-  // Install delivery always needs tools (the Skill tool does the triggering),
-  // even when the grader is text-only and inline delivery would disable them.
-  const fallbackTools = config.delivery === "install" ? "default" : defaultTools(mode);
   return {
     systemPrompt,
     systemPromptMode: config.delivery === "install" ? "append" : "replace",
@@ -186,10 +204,18 @@ function buildRunnerOptions(
     model: config.model,
     cwd,
     addDirs: [...config.addDirs, ...evalCase.addDirs],
-    tools: evalCase.tools ?? config.tools ?? fallbackTools,
+    tools: effectiveTools(config, evalCase),
     timeoutMs: config.timeoutMs,
     maxBudgetUsd: config.maxBudgetUsd,
   };
+}
+
+function effectiveTools(config: CompareConfig, evalCase: EvalCaseConfig): string {
+  const mode = evalCase.mode ?? config.mode ?? inferMode(evalCase);
+  // Install delivery always needs tools (the Skill tool does the triggering),
+  // even when the grader is text-only and inline delivery would disable them.
+  const fallbackTools = config.delivery === "install" ? "default" : defaultTools(mode);
+  return evalCase.tools ?? config.tools ?? fallbackTools;
 }
 
 function toArmRunSummary(

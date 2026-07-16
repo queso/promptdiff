@@ -1,0 +1,116 @@
+import type { RunResult, Runner, RunnerRunOptions } from "../types";
+
+export interface OpenAiCompatRunnerConfig {
+  /** Defaults to $OPENAI_BASE_URL, then https://api.openai.com/v1. */
+  baseUrl?: string;
+  /** Defaults to $OPENAI_API_KEY. Optional — local servers often need none. */
+  apiKey?: string;
+  fetchFn?: typeof fetch;
+}
+
+export interface ChatRequest {
+  model: string;
+  messages: Array<{ role: "system" | "user"; content: string }>;
+}
+
+interface ChatCompletion {
+  model?: unknown;
+  choices?: unknown;
+  usage?: unknown;
+}
+
+export function buildChatRequest(options: RunnerRunOptions): ChatRequest {
+  if (options.systemPromptMode === "append") {
+    throw new Error(
+      'runner "openai" has no default harness prompt to append to (install delivery is claude-p only)',
+    );
+  }
+  const messages: ChatRequest["messages"] = [];
+  if (options.systemPrompt.trim().length > 0) {
+    messages.push({ role: "system", content: options.systemPrompt });
+  }
+  messages.push({ role: "user", content: options.userPrompt });
+  return { model: options.model, messages };
+}
+
+/**
+ * Single-shot chat-completion runner for any OpenAI-compatible endpoint
+ * (OpenAI, ollama, vLLM, llama.cpp, OpenRouter, ...). Text mode only: no
+ * tools, no sandbox execution, no skill registry.
+ */
+export class OpenAiCompatRunner implements Runner {
+  readonly name = "openai";
+  readonly capabilities = { sandboxTools: false, skillRegistry: false };
+
+  private readonly baseUrl: string;
+  private readonly apiKey: string | undefined;
+  private readonly fetchFn: typeof fetch;
+
+  constructor(config: OpenAiCompatRunnerConfig = {}) {
+    this.baseUrl = (config.baseUrl ?? process.env.OPENAI_BASE_URL ?? "https://api.openai.com/v1").replace(/\/+$/, "");
+    this.apiKey = config.apiKey ?? process.env.OPENAI_API_KEY;
+    this.fetchFn = config.fetchFn ?? fetch;
+  }
+
+  async run(options: RunnerRunOptions): Promise<RunResult> {
+    const url = `${this.baseUrl}/chat/completions`;
+    const headers: Record<string, string> = { "content-type": "application/json" };
+    if (this.apiKey) {
+      headers.authorization = `Bearer ${this.apiKey}`;
+    }
+
+    const started = Date.now();
+    let response: Response;
+    try {
+      response = await this.fetchFn(url, {
+        method: "POST",
+        headers,
+        body: JSON.stringify(buildChatRequest(options)),
+        signal: AbortSignal.timeout(options.timeoutMs),
+      });
+    } catch (error) {
+      if (error instanceof DOMException && error.name === "TimeoutError") {
+        throw new Error(`${url} timed out after ${options.timeoutMs}ms`);
+      }
+      const reason = error instanceof Error ? error.message : String(error);
+      throw new Error(`request to ${url} failed: ${reason}`);
+    }
+
+    const body = await response.text();
+    if (!response.ok) {
+      throw new Error(`${url} returned ${response.status}: ${body.slice(0, 1_500)}`);
+    }
+
+    let parsed: ChatCompletion;
+    try {
+      parsed = JSON.parse(body) as ChatCompletion;
+    } catch {
+      throw new Error(`${url} returned invalid JSON: ${body.slice(0, 1_500)}`);
+    }
+
+    return normalizeChatCompletion(parsed, options.model, Date.now() - started);
+  }
+}
+
+function normalizeChatCompletion(result: ChatCompletion, requestedModel: string, durationMs: number): RunResult {
+  const choice = Array.isArray(result.choices) ? result.choices[0] : undefined;
+  const message = isRecord(choice) && isRecord(choice.message) ? choice.message : undefined;
+  const content = message?.content;
+  if (typeof content !== "string") {
+    throw new Error(`chat completion has no choices[0].message.content string: ${JSON.stringify(result).slice(0, 1_500)}`);
+  }
+
+  return {
+    output: content,
+    // OpenAI-compatible endpoints report tokens, not USD; usage stays in `raw`.
+    costUsd: 0,
+    turns: 1,
+    durationMs,
+    models: [typeof result.model === "string" ? result.model : requestedModel],
+    raw: result,
+  };
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
+}

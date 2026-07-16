@@ -17,6 +17,8 @@ test("runCompare verifies target improvement and regression preservation", async
     writeFileSync(proposed, "PROPOSED", "utf8");
 
     const runner: Runner = {
+      name: "mock",
+      capabilities: { sandboxTools: true, skillRegistry: true },
       async run(options: RunnerRunOptions) {
         const isProposed = options.systemPrompt.includes("PROPOSED");
         const isRegression = options.userPrompt.includes("regression");
@@ -37,6 +39,7 @@ test("runCompare verifies target improvement and regression preservation", async
       baselineSkills: [baseline],
       proposedSkills: [proposed],
       delivery: "inline",
+      runner: "claude-p",
       model: "sonnet",
       runs: 2,
       timeoutMs: 1_000,

@@ -2,6 +2,7 @@ import { readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import type { GraderSpec } from "./grader";
 import { deliveryValue, type Delivery } from "./skill-install";
+import { runnerNameValue, type RunnerName } from "../runner";
 import type { RunMode } from "../types";
 
 export type ScenarioKind = "target" | "regression";
@@ -24,6 +25,9 @@ export interface CompareConfig {
   baselineSkills: string[];
   proposedSkills: string[];
   delivery: Delivery;
+  runner: RunnerName;
+  /** OpenAI-compatible endpoint base URL; only meaningful for the openai runner. */
+  baseUrl?: string;
   model: string;
   runs: number;
   timeoutMs: number;
@@ -42,6 +46,8 @@ export interface CompareOverrides {
   baselineSkills?: string[];
   proposedSkills?: string[];
   delivery?: Delivery;
+  runner?: RunnerName;
+  baseUrl?: string;
   model?: string;
   runs?: number;
   timeoutMs?: number;
@@ -62,6 +68,8 @@ interface RawCompareConfig {
   baseline?: unknown;
   proposed?: unknown;
   delivery?: unknown;
+  runner?: unknown;
+  baseUrl?: unknown;
   model?: unknown;
   runs?: unknown;
   timeoutMs?: unknown;
@@ -120,6 +128,8 @@ export function loadCompareConfig(path: string, overrides: CompareOverrides = {}
     baselineSkills: baselineSkills.map((skill) => resolveFrom(baseDir, skill)),
     proposedSkills: proposedSkills.map((skill) => resolveFrom(baseDir, skill)),
     delivery: overrides.delivery ?? deliveryValue(raw.delivery, "inline"),
+    runner: overrides.runner ?? runnerNameValue(raw.runner, "claude-p"),
+    baseUrl: overrides.baseUrl ?? stringValue(raw.baseUrl, undefined),
     model: overrides.model ?? requiredString(raw.model, "model"),
     runs: overrides.runs ?? numberValue(raw.runs, 5),
     timeoutMs: overrides.timeoutMs ?? numberValue(raw.timeoutMs, 600_000),

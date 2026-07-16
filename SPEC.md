@@ -3,7 +3,8 @@
 Status: early implementation. The original spike proved the `claude -p`
 mechanism; the current repo now contains a real `run` command, a scenario-driven
 `compare` command, deterministic graders, sandbox setup, timeout and budget
-bounds, and tests for the core local behavior.
+bounds, pluggable runners (headless Claude Code and OpenAI-compatible
+endpoints), and tests for the core local behavior.
 
 ## 1. Problem
 
@@ -28,9 +29,25 @@ The eval method should match the change being tested:
 `promptdiff` targets the second row. It runs one agent with baseline skill text
 and one agent with proposed skill text against the same scenario set.
 
-## 3. Claude Runner
+## 3. Runners
 
-The runner shells out to headless Claude Code:
+Model access goes through a small `Runner` interface: system prompt + user
+prompt + bounds in, `RunResult` (output text, cost, turns, duration, models)
+out. Each runner declares capabilities:
+
+- `sandboxTools`: the runner executes tools inside the sandbox cwd (needed for
+  artifact mode, command graders, and any non-empty tools list)
+- `skillRegistry`: the runner has a harness-managed skill registry and an
+  appendable default system prompt (needed for install delivery)
+
+The engine validates a scenario's demands against the selected runner's
+capabilities before any paid run, so unsupported combinations fail loudly at
+startup instead of producing a silently tool-less arm. Runners are selected
+with `--runner <name>` or a top-level `"runner"` scenario field.
+
+### 3.1 `claude-p` (default)
+
+Shells out to headless Claude Code:
 
 ```bash
 claude -p "<fixture work item>" \
@@ -45,13 +62,21 @@ The spawned process runs with the per-run sandbox as its actual working
 directory. Extra directories can be granted with `--add-dir`, but they are not
 used as a substitute for sandboxing.
 
-The runner captures:
+The runner captures final output text, `total_cost_usd`, turn count, duration,
+and model usage keys.
 
-- final output text
-- `total_cost_usd`
-- turn count
-- duration
-- model usage keys
+### 3.2 `openai`
+
+Sends one `POST <baseUrl>/chat/completions` request to any OpenAI-compatible
+endpoint (OpenAI, ollama, vLLM, llama.cpp, OpenRouter, ...). The assembled
+system prompt and the scenario prompt become the `system` and `user` messages.
+`--base-url`/`$OPENAI_BASE_URL` select the server; `$OPENAI_API_KEY` is sent as
+a bearer token when set (local servers need none).
+
+Text mode only — no tools, no sandbox execution, no skill registry, so it pairs
+with text graders. Cost is reported as 0 (these endpoints report tokens, not
+USD; token usage is preserved in the raw result), and each run is exactly one
+completion, so the budget bound is structural rather than enforced.
 
 ## 4. A/B Variable
 
@@ -134,8 +159,10 @@ src/engine/         # compare loop, config loading, graders, sandbox lifecycle
 test/               # Bun tests
 ```
 
-The compare engine depends on a small runner interface. Claude Code is the first
-runner, but the engine does not import provider SDKs.
+The compare engine depends only on the runner interface and its declared
+capabilities; it never imports provider SDKs or provider-specific code.
+`src/runner/index.ts` is the registry that maps runner names to
+implementations.
 
 ## 8. Current Limitations
 
@@ -145,14 +172,17 @@ runner, but the engine does not import provider SDKs.
   files from accepted findings.
 - Command graders run trusted local commands from scenario files. Do not run
   untrusted scenario files.
-- The OpenAI-compatible runner is still planned, not implemented.
+- The openai runner is a single completion per run: no tool use, so it can only
+  answer text-graded questions. Tool-using evals on non-Claude models would
+  need an agentic runner (e.g. wrapping another agent CLI).
 - Fixture coverage remains the bottleneck. Missing fixtures mean missing
   regression protection.
 
 ## 9. Decisions
 
 - Standalone Bun repo rather than embedding in a larger mission runner.
-- Claude Code `-p` runner first.
+- Claude Code `-p` runner first; OpenAI-compatible endpoints second. Runner
+  capabilities are validated up front rather than degraded silently.
 - Inline skills for variant control.
 - Deterministic graders first; LLM judges later if needed.
 - Per-run sandbox cwd, timeout, and budget bounds are mandatory for paid runs.

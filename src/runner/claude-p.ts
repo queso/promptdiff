@@ -55,6 +55,9 @@ export function buildClaudeArgs(options: RunnerRunOptions & { systemPromptFile: 
 }
 
 export class ClaudePrintRunner implements Runner {
+  readonly name = "claude-p";
+  readonly capabilities = { sandboxTools: true, skillRegistry: true };
+
   constructor(private readonly claudeBin = "claude") {}
 
   async run(options: RunnerRunOptions): Promise<RunResult> {
