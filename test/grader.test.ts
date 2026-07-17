@@ -36,3 +36,19 @@ test("command grader runs inside the sandbox", async () => {
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test("command graders receive the run output via $PROMPTDIFF_OUTPUT_FILE", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "pd-grade-out-"));
+  const grade = await gradeRun(
+    { type: "command", command: 'grep -q "the model said this" "$PROMPTDIFF_OUTPUT_FILE"' },
+    { run: { ...run, output: "well, the model said this indeed" }, sandboxDir: dir },
+  );
+  expect(grade.pass).toBe(true);
+
+  const miss = await gradeRun(
+    { type: "command", command: 'grep -q "something else" "$PROMPTDIFF_OUTPUT_FILE"' },
+    { run: { ...run, output: "well, the model said this indeed" }, sandboxDir: dir },
+  );
+  expect(miss.pass).toBe(false);
+  rmSync(dir, { recursive: true, force: true });
+});

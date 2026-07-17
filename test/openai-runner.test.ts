@@ -101,9 +101,71 @@ test("OpenAiCompatRunner surfaces HTTP errors and malformed completions", async 
 test("createRunner builds runners with the right capabilities", () => {
   const claude = createRunner("claude-p");
   expect(claude.name).toBe("claude-p");
-  expect(claude.capabilities).toEqual({ sandboxTools: true, skillRegistry: true });
+  expect(claude.capabilities).toEqual({ sandboxTools: true, skillRegistry: true, images: false });
 
   const openai = createRunner("openai", { baseUrl: "http://localhost:8080/v1" });
   expect(openai.name).toBe("openai");
-  expect(openai.capabilities).toEqual({ sandboxTools: false, skillRegistry: false });
+  expect(openai.capabilities).toEqual({ sandboxTools: false, skillRegistry: false, images: true });
+});
+
+test("buildChatRequest attaches images as data-URI content parts before the text", () => {
+  const dir = require("node:fs").mkdtempSync(require("node:path").join(require("node:os").tmpdir(), "pd-img-"));
+  const imagePath = require("node:path").join(dir, "spool.png");
+  // 1x1 transparent PNG
+  const pngBytes = Buffer.from(
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==",
+    "base64",
+  );
+  require("node:fs").writeFileSync(imagePath, pngBytes);
+
+  const request = buildChatRequest({ ...baseOptions, images: [imagePath] });
+  const user = request.messages.at(-1);
+  expect(user?.role).toBe("user");
+  const parts = user?.content;
+  if (typeof parts === "string" || parts === undefined) throw new Error("expected content parts");
+  expect(parts).toHaveLength(2);
+  expect(parts[0]).toEqual({
+    type: "image_url",
+    image_url: { url: `data:image/png;base64,${pngBytes.toString("base64")}` },
+  });
+  expect(parts[1]).toEqual({ type: "text", text: "do work" });
+
+  require("node:fs").rmSync(dir, { recursive: true, force: true });
+});
+
+test("buildChatRequest rejects unsupported image extensions before any request", () => {
+  expect(() => buildChatRequest({ ...baseOptions, images: ["/tmp/photo.tiff"] })).toThrow(
+    /unsupported image type/,
+  );
+});
+
+test("buildChatRequest merges requestParams without clobbering model or messages", () => {
+  const request = buildChatRequest({
+    ...baseOptions,
+    requestParams: { max_tokens: 512, temperature: 0, model: "evil-override" },
+  });
+  expect(request.max_tokens).toBe(512);
+  expect(request.temperature).toBe(0);
+  expect(request.model).toBe("gpt-4o-mini");
+});
+
+test("OpenAiCompatRunner retries timeouts up to `retries` extra attempts", async () => {
+  let attempts = 0;
+  const fetchFn = (async () => {
+    attempts += 1;
+    if (attempts < 3) {
+      const err = new DOMException("The operation timed out.", "TimeoutError");
+      throw err;
+    }
+    return new Response(completion("recovered"));
+  }) as unknown as typeof fetch;
+
+  const runner = new OpenAiCompatRunner({ baseUrl: "http://x/v1", retries: 2, fetchFn });
+  const result = await runner.run(baseOptions);
+  expect(result.output).toBe("recovered");
+  expect(attempts).toBe(3);
+
+  attempts = 0;
+  const noRetry = new OpenAiCompatRunner({ baseUrl: "http://x/v1", retries: 0, fetchFn });
+  await expect(noRetry.run(baseOptions)).rejects.toThrow(/after 1 attempts/);
 });

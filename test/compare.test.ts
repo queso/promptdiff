@@ -18,7 +18,7 @@ test("runCompare verifies target improvement and regression preservation", async
 
     const runner: Runner = {
       name: "mock",
-      capabilities: { sandboxTools: true, skillRegistry: true },
+      capabilities: { sandboxTools: true, skillRegistry: true, images: false },
       async run(options: RunnerRunOptions) {
         const isProposed = options.systemPrompt.includes("PROPOSED");
         const isRegression = options.userPrompt.includes("regression");
@@ -53,6 +53,7 @@ test("runCompare verifies target improvement and regression preservation", async
           kind: "target",
           prompt: "target",
           grader: { type: "text", contains: ["ok"] },
+          images: [],
           addDirs: [],
         },
         {
@@ -60,6 +61,7 @@ test("runCompare verifies target improvement and regression preservation", async
           kind: "regression",
           prompt: "regression",
           grader: { type: "text", contains: ["ok"] },
+          images: [],
           addDirs: [],
         },
       ],

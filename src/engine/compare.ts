@@ -129,6 +129,13 @@ export function validateRunnerSupport(config: CompareConfig, runner: Runner): vo
       `delivery "install" needs a runner with a skill registry; runner "${runner.name}" has none (use claude-p)`,
     );
   }
+  for (const evalCase of config.cases) {
+    if (evalCase.images.length > 0 && !runner.capabilities.images) {
+      throw new Error(
+        `runner "${runner.name}" cannot attach images, but scenario "${evalCase.name}" has \`images\` — use the openai runner with a vision model`,
+      );
+    }
+  }
   if (runner.capabilities.sandboxTools) return;
   for (const evalCase of config.cases) {
     if (effectiveTools(config, evalCase) !== "") {
@@ -201,6 +208,8 @@ function buildRunnerOptions(
     systemPrompt,
     systemPromptMode: config.delivery === "install" ? "append" : "replace",
     userPrompt: evalCase.prompt,
+    images: evalCase.images,
+    requestParams: config.requestParams,
     model: config.model,
     cwd,
     addDirs: [...config.addDirs, ...evalCase.addDirs],

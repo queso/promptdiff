@@ -1,5 +1,5 @@
-import { existsSync } from "node:fs";
-import { resolve } from "node:path";
+import { existsSync, writeFileSync } from "node:fs";
+import { join, resolve } from "node:path";
 import type { RunResult } from "../types";
 
 export type GraderSpec =
@@ -33,7 +33,11 @@ export async function gradeRun(spec: GraderSpec, input: GradeInput): Promise<Gra
   if (spec.type === "text") {
     return gradeText(spec, input.run.output);
   }
-  return gradeCommand(spec, input.sandboxDir);
+  // Command graders judge sandbox files — but for completion-style runs the model's
+  // text IS the artifact, so it lands in the sandbox too ($PROMPTDIFF_OUTPUT_FILE).
+  const outputFile = join(input.sandboxDir, ".promptdiff-output.txt");
+  writeFileSync(outputFile, input.run.output);
+  return gradeCommand(spec, input.sandboxDir, outputFile);
 }
 
 function gradeText(spec: Extract<GraderSpec, { type: "text" }>, output: string): GradeResult {
@@ -61,6 +65,7 @@ function gradeText(spec: Extract<GraderSpec, { type: "text" }>, output: string):
 async function gradeCommand(
   spec: Extract<GraderSpec, { type: "command" }>,
   sandboxDir: string,
+  outputFile: string,
 ): Promise<GradeResult> {
   const cwd = resolve(sandboxDir, spec.cwd ?? ".");
   if (!existsSync(cwd)) {
@@ -69,6 +74,7 @@ async function gradeCommand(
 
   const proc = Bun.spawn(["sh", "-lc", spec.command], {
     cwd,
+    env: { ...process.env, PROMPTDIFF_OUTPUT_FILE: outputFile },
     stdout: "pipe",
     stderr: "pipe",
   });

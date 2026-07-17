@@ -26,6 +26,11 @@ export interface RunnerCapabilities {
    * prompt that can be appended to — required for install delivery.
    */
   skillRegistry: boolean;
+  /**
+   * The runner can attach image files to the user message (vision models) —
+   * required for scenarios with `images`.
+   */
+  images: boolean;
 }
 
 export interface RunnerRunOptions {
@@ -38,6 +43,10 @@ export interface RunnerRunOptions {
    */
   systemPromptMode?: "replace" | "append";
   userPrompt: string;
+  /** Image file paths attached to the user message (vision evals). */
+  images?: string[];
+  /** Extra request-body fields for completion runners (e.g. max_tokens, temperature). */
+  requestParams?: Record<string, unknown>;
   model: string;
   /** Sandbox directory; graders run here. Agentic runners also execute in it. */
   cwd: string;

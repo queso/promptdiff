@@ -56,7 +56,7 @@ export function buildClaudeArgs(options: RunnerRunOptions & { systemPromptFile: 
 
 export class ClaudePrintRunner implements Runner {
   readonly name = "claude-p";
-  readonly capabilities = { sandboxTools: true, skillRegistry: true };
+  readonly capabilities = { sandboxTools: true, skillRegistry: true, images: false };
 
   constructor(private readonly claudeBin = "claude") {}
 

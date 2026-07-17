@@ -5,7 +5,7 @@ import type { Runner } from "../src/types";
 
 const textOnlyRunner: Runner = {
   name: "openai",
-  capabilities: { sandboxTools: false, skillRegistry: false },
+  capabilities: { sandboxTools: false, skillRegistry: false, images: true },
   async run() {
     throw new Error("unused");
   },
@@ -32,6 +32,7 @@ function makeConfig(overrides: Partial<CompareConfig>, caseOverrides: Partial<Ev
         kind: "target",
         prompt: "do it",
         grader: { type: "text", contains: ["ok"] },
+        images: [],
         addDirs: [],
         ...caseOverrides,
       },

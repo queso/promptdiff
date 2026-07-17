@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+import { extname } from "node:path";
 import type { RunResult, Runner, RunnerRunOptions } from "../types";
 
 export interface OpenAiCompatRunnerConfig {
@@ -5,12 +7,36 @@ export interface OpenAiCompatRunnerConfig {
   baseUrl?: string;
   /** Defaults to $OPENAI_API_KEY. Optional — local servers often need none. */
   apiKey?: string;
+  /** Extra attempts after a per-request timeout (flaky local endpoints). Default 0. */
+  retries?: number;
   fetchFn?: typeof fetch;
 }
 
+export type ChatContentPart =
+  | { type: "text"; text: string }
+  | { type: "image_url"; image_url: { url: string } };
+
 export interface ChatRequest {
   model: string;
-  messages: Array<{ role: "system" | "user"; content: string }>;
+  messages: Array<{ role: "system" | "user"; content: string | ChatContentPart[] }>;
+  [param: string]: unknown;
+}
+
+const IMAGE_MIME: Record<string, string> = {
+  ".jpg": "image/jpeg",
+  ".jpeg": "image/jpeg",
+  ".png": "image/png",
+  ".webp": "image/webp",
+  ".gif": "image/gif",
+};
+
+/** File path → data URI. Throws on unsupported extensions before any paid run. */
+export function imageDataUri(path: string): string {
+  const mime = IMAGE_MIME[extname(path).toLowerCase()];
+  if (!mime) {
+    throw new Error(`unsupported image type "${extname(path)}" (${path}); supported: ${Object.keys(IMAGE_MIME).join(", ")}`);
+  }
+  return `data:${mime};base64,${readFileSync(path).toString("base64")}`;
 }
 
 interface ChatCompletion {
@@ -29,8 +55,20 @@ export function buildChatRequest(options: RunnerRunOptions): ChatRequest {
   if (options.systemPrompt.trim().length > 0) {
     messages.push({ role: "system", content: options.systemPrompt });
   }
-  messages.push({ role: "user", content: options.userPrompt });
-  return { model: options.model, messages };
+  const images = options.images ?? [];
+  if (images.length > 0) {
+    messages.push({
+      role: "user",
+      content: [
+        ...images.map((path): ChatContentPart => ({ type: "image_url", image_url: { url: imageDataUri(path) } })),
+        { type: "text", text: options.userPrompt },
+      ],
+    });
+  } else {
+    messages.push({ role: "user", content: options.userPrompt });
+  }
+  // Spread first so extra params can never clobber model or messages.
+  return { ...(options.requestParams ?? {}), model: options.model, messages };
 }
 
 /**
@@ -40,19 +78,38 @@ export function buildChatRequest(options: RunnerRunOptions): ChatRequest {
  */
 export class OpenAiCompatRunner implements Runner {
   readonly name = "openai";
-  readonly capabilities = { sandboxTools: false, skillRegistry: false };
+  readonly capabilities = { sandboxTools: false, skillRegistry: false, images: true };
 
   private readonly baseUrl: string;
   private readonly apiKey: string | undefined;
+  private readonly retries: number;
   private readonly fetchFn: typeof fetch;
 
   constructor(config: OpenAiCompatRunnerConfig = {}) {
     this.baseUrl = (config.baseUrl ?? process.env.OPENAI_BASE_URL ?? "https://api.openai.com/v1").replace(/\/+$/, "");
     this.apiKey = config.apiKey ?? process.env.OPENAI_API_KEY;
+    this.retries = config.retries ?? 0;
     this.fetchFn = config.fetchFn ?? fetch;
   }
 
   async run(options: RunnerRunOptions): Promise<RunResult> {
+    // Only timeouts are retried — they produced nothing and are the transient
+    // failure mode of flaky local endpoints. HTTP errors and bad JSON still throw.
+    let lastError: Error | undefined;
+    for (let attempt = 0; attempt <= this.retries; attempt += 1) {
+      try {
+        return await this.runOnce(options);
+      } catch (error) {
+        // Timeouts and connect-level failures are the transient modes of flaky
+        // local endpoints; HTTP errors and bad JSON still throw immediately.
+        if (!(error instanceof Error) || !/timed out after|request to .* failed/.test(error.message)) throw error;
+        lastError = error;
+      }
+    }
+    throw new Error(`${lastError?.message} (after ${this.retries + 1} attempts)`);
+  }
+
+  private async runOnce(options: RunnerRunOptions): Promise<RunResult> {
     const url = `${this.baseUrl}/chat/completions`;
     const headers: Record<string, string> = { "content-type": "application/json" };
     if (this.apiKey) {

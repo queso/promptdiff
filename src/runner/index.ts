@@ -9,6 +9,8 @@ export type RunnerName = (typeof RUNNER_NAMES)[number];
 export interface CreateRunnerOptions {
   /** OpenAI-compatible endpoint base URL; ignored by claude-p. */
   baseUrl?: string;
+  /** Timeout retries for the openai runner; ignored by claude-p. */
+  retries?: number;
 }
 
 export function createRunner(name: RunnerName, options: CreateRunnerOptions = {}): Runner {
@@ -16,7 +18,7 @@ export function createRunner(name: RunnerName, options: CreateRunnerOptions = {}
     case "claude-p":
       return new ClaudePrintRunner();
     case "openai":
-      return new OpenAiCompatRunner({ baseUrl: options.baseUrl });
+      return new OpenAiCompatRunner({ baseUrl: options.baseUrl, retries: options.retries });
   }
 }
 

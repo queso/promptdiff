@@ -1,4 +1,4 @@
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import type { GraderSpec } from "./grader";
 import { deliveryValue, type Delivery } from "./skill-install";
@@ -12,6 +12,8 @@ export interface EvalCaseConfig {
   kind: ScenarioKind;
   prompt: string;
   grader: GraderSpec;
+  /** Image file paths attached to the user message (vision evals; openai runner only). */
+  images: string[];
   runs?: number;
   seed?: string;
   addDirs: string[];
@@ -28,6 +30,10 @@ export interface CompareConfig {
   runner: RunnerName;
   /** OpenAI-compatible endpoint base URL; only meaningful for the openai runner. */
   baseUrl?: string;
+  /** Extra chat-request body fields (max_tokens, temperature, ...); openai runner only. */
+  requestParams?: Record<string, unknown>;
+  /** Timeout retries per model call; openai runner only. Default 0. */
+  retries?: number;
   model: string;
   runs: number;
   timeoutMs: number;
@@ -70,6 +76,8 @@ interface RawCompareConfig {
   delivery?: unknown;
   runner?: unknown;
   baseUrl?: unknown;
+  requestParams?: unknown;
+  retries?: unknown;
   model?: unknown;
   runs?: unknown;
   timeoutMs?: unknown;
@@ -90,6 +98,7 @@ interface RawCase {
   prompt?: unknown;
   promptFile?: unknown;
   grader?: unknown;
+  images?: unknown;
   runs?: unknown;
   seed?: unknown;
   addDirs?: unknown;
@@ -115,7 +124,7 @@ export function loadCompareConfig(path: string, overrides: CompareOverrides = {}
   const rawCases = Array.isArray(raw.scenarios)
     ? raw.scenarios
     : topLevelCase
-      ? [{ name: raw.name, prompt: raw.prompt, promptFile: raw.promptFile, grader: raw.grader }]
+      ? [{ name: raw.name, prompt: raw.prompt, promptFile: raw.promptFile, grader: raw.grader, images: (raw as RawCase).images }]
       : [];
 
   if (rawCases.length === 0) {
@@ -130,6 +139,8 @@ export function loadCompareConfig(path: string, overrides: CompareOverrides = {}
     delivery: overrides.delivery ?? deliveryValue(raw.delivery, "inline"),
     runner: overrides.runner ?? runnerNameValue(raw.runner, "claude-p"),
     baseUrl: overrides.baseUrl ?? stringValue(raw.baseUrl, undefined),
+    requestParams: raw.requestParams === undefined ? undefined : recordOf(raw.requestParams, "requestParams"),
+    retries: raw.retries === undefined ? undefined : numberValue(raw.retries, 0),
     model: overrides.model ?? requiredString(raw.model, "model"),
     runs: overrides.runs ?? numberValue(raw.runs, 5),
     timeoutMs: overrides.timeoutMs ?? numberValue(raw.timeoutMs, 600_000),
@@ -157,6 +168,7 @@ function normalizeCase(baseDir: string, raw: RawCase, index: number): EvalCaseCo
     kind: kindValue(raw.kind, index === 0 ? "target" : "regression"),
     prompt,
     grader: graderValue(raw.grader, name),
+    images: stringArray(raw.images, `${name}.images`).map((image) => resolveFrom(baseDir, image)),
     runs: optionalNumber(raw.runs, `${name}.runs`),
     seed: optionalPath(baseDir, stringValue(raw.seed, undefined)),
     addDirs: stringArray(raw.addDirs, `${name}.addDirs`).map((dir) => resolveFrom(baseDir, dir)),
@@ -184,6 +196,12 @@ function validateCompareConfig(config: CompareConfig): void {
   for (const evalCase of config.cases) {
     if (evalCase.runs !== undefined && evalCase.runs < 1) {
       throw new Error(`${evalCase.name}.runs must be at least 1`);
+    }
+    for (const image of evalCase.images) {
+      // A missing image must fail at load time, not after the other arm's paid runs.
+      if (!existsSync(image)) {
+        throw new Error(`${evalCase.name}.images: file not found: ${image}`);
+      }
     }
   }
   if (config.delivery === "install") {
@@ -310,6 +328,13 @@ function resolveFrom(baseDir: string, path: string): string {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
+}
+
+function recordOf(value: unknown, label: string): Record<string, unknown> {
+  if (!isRecord(value) || Array.isArray(value)) {
+    throw new Error(`${label} must be an object`);
+  }
+  return value as Record<string, unknown>;
 }
 
 function recordValue(value: unknown, label: string): RawCase {

@@ -28,7 +28,7 @@ test("install delivery puts arm skills in each sandbox registry and keeps them o
     const seenPrompts: string[] = [];
     const runner: Runner = {
       name: "mock",
-      capabilities: { sandboxTools: true, skillRegistry: true },
+      capabilities: { sandboxTools: true, skillRegistry: true, images: false },
       async run(options: RunnerRunOptions) {
         seenPrompts.push(options.systemPrompt);
         expect(options.systemPromptMode).toBe("append");
@@ -60,6 +60,7 @@ test("install delivery puts arm skills in each sandbox registry and keeps them o
           kind: "target",
           prompt: "do the task",
           grader: { type: "text", contains: ["proposed"] },
+          images: [],
           addDirs: [],
         },
       ],

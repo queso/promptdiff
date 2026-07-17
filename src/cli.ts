@@ -20,6 +20,7 @@ const runSpecs: FlagSpecs = {
   model: { arity: "one" },
   prompt: { arity: "one" },
   "prompt-file": { arity: "one" },
+  image: { arity: "one", repeat: true },
   mode: { arity: "one" },
   sandbox: { arity: "one" },
   seed: { arity: "one" },
@@ -115,6 +116,10 @@ async function cmdRun(argv: string[]): Promise<void> {
   if (tools !== "" && !runner.capabilities.sandboxTools) {
     throw new CliError(`runner "${runner.name}" is text-only — artifact mode and tools need claude-p (or pass --tools "")`);
   }
+  const images = args.many("image");
+  if (images.length > 0 && !runner.capabilities.images) {
+    throw new CliError(`runner "${runner.name}" cannot attach images — use --runner openai with a vision model`);
+  }
   const keepSandbox = args.has("keep-sandbox") || (mode === "artifact" && !args.has("clean-sandbox"));
   const sandbox = prepareSandbox({
     root: args.one("sandbox") ?? ".promptdiff/run",
@@ -138,6 +143,7 @@ async function cmdRun(argv: string[]): Promise<void> {
       systemPrompt,
       systemPromptMode: delivery === "install" ? "append" : "replace",
       userPrompt: prompt,
+      images,
       model,
       cwd: sandbox.dir,
       addDirs: args.many("add-dir"),
@@ -195,7 +201,7 @@ async function cmdCompare(argv: string[]): Promise<number> {
   const config = loadCompareConfig(scenario, overrides);
   const summary = await runCompare({
     config,
-    runner: createRunner(config.runner, { baseUrl: config.baseUrl }),
+    runner: createRunner(config.runner, { baseUrl: config.baseUrl, retries: config.retries }),
     onProgress: (message) => console.error(`[promptdiff] ${message}`),
   });
 
@@ -249,7 +255,7 @@ function runUsage(): string {
     "skill set behaves roughly as expected before promoting the fixture to compare.",
     "",
     "flags: --skill <SKILL.md|dir>... --delivery <inline|install> --mode <text|artifact>",
-    "       --runner <claude-p|openai> --base-url <url>",
+    "       --runner <claude-p|openai> --base-url <url> --image <file>...",
     "       --sandbox <dir> --seed <dir> --tools <tools|default|''>",
     "       --timeout-ms <ms> --max-budget-usd <usd>",
     "",
@@ -258,7 +264,8 @@ function runUsage(): string {
     "            and install delivery",
     "  openai    single chat completion against any OpenAI-compatible endpoint",
     "            (text mode only); --base-url or $OPENAI_BASE_URL picks the server,",
-    "            $OPENAI_API_KEY is sent when set",
+    "            $OPENAI_API_KEY is sent when set; --image attaches image files",
+    "            to the user message for vision models (repeatable)",
     "",
     "modes:",
     "  text      disables tools with --tools '' and grades only the final output manually",
@@ -298,6 +305,11 @@ function compareUsage(): string {
     "  text     checks the run's final output with contains, notContains, and regex arrays",
     "  command  runs a shell command inside the per-run sandbox and checks exit code",
     "           (needs a tool-capable runner: claude-p)",
+    "",
+    "images:",
+    "  a scenario may set \"images\": [\"photo.jpg\", ...] (paths relative to the",
+    "  scenario file) to attach images to the user message — openai runner +",
+    "  vision model only",
     "",
     "assertions:",
     "  target      baseline must not fully pass; proposed must beat baseline pass rate",
