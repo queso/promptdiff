@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 import { CliError, parseArgs, type FlagSpecs } from "./args";
-import { loadCompareConfig, type CompareOverrides } from "./engine/config";
+import { loadCompareConfig, type ArmConfig, type CompareOverrides } from "./engine/config";
 import { formatCompareSummary, runCompare } from "./engine/compare";
 import { prepareSandbox } from "./engine/sandbox";
 import { installSkills, type Delivery } from "./engine/skill-install";
@@ -41,8 +41,12 @@ const compareSpecs: FlagSpecs = {
   "proposed-skill": { arity: "one", repeat: true },
   delivery: { arity: "one" },
   runner: { arity: "one" },
+  "baseline-runner": { arity: "one" },
+  "proposed-runner": { arity: "one" },
   "base-url": { arity: "one" },
   model: { arity: "one" },
+  "baseline-model": { arity: "one" },
+  "proposed-model": { arity: "one" },
   runs: { arity: "one" },
   mode: { arity: "one" },
   sandbox: { arity: "one" },
@@ -185,8 +189,12 @@ async function cmdCompare(argv: string[]): Promise<number> {
     proposedSkills: coalesceMany(args.many("proposed-skill"), args.many("proposed")),
     delivery: args.one("delivery") ? deliveryFromString(args.one("delivery")) : undefined,
     runner: args.one("runner") ? runnerNameFromString(args.one("runner")) : undefined,
+    baselineRunner: args.one("baseline-runner") ? runnerNameFromString(args.one("baseline-runner")) : undefined,
+    proposedRunner: args.one("proposed-runner") ? runnerNameFromString(args.one("proposed-runner")) : undefined,
     baseUrl: args.one("base-url"),
     model: args.one("model"),
+    baselineModel: args.one("baseline-model"),
+    proposedModel: args.one("proposed-model"),
     runs: args.has("runs") ? args.number("runs", 0) : undefined,
     timeoutMs: args.has("timeout-ms") ? args.number("timeout-ms", DEFAULT_TIMEOUT_MS) : undefined,
     maxBudgetUsd: args.has("max-budget-usd") ? args.number("max-budget-usd", DEFAULT_MAX_BUDGET_USD) : undefined,
@@ -201,7 +209,10 @@ async function cmdCompare(argv: string[]): Promise<number> {
   const config = loadCompareConfig(scenario, overrides);
   const summary = await runCompare({
     config,
-    runner: createRunner(config.runner, { baseUrl: config.baseUrl, retries: config.retries }),
+    runners: {
+      baseline: armRunner(config.arms.baseline, config.retries),
+      proposed: armRunner(config.arms.proposed, config.retries),
+    },
     onProgress: (message) => console.error(`[promptdiff] ${message}`),
   });
 
@@ -235,6 +246,10 @@ function runnerNameFromString(value: string | undefined): RunnerName {
 
 function runnerFromArgs(name: string | undefined, baseUrl: string | undefined): Runner {
   return createRunner(name === undefined ? "claude-p" : runnerNameFromString(name), { baseUrl });
+}
+
+function armRunner(arm: ArmConfig, retries: number | undefined): Runner {
+  return createRunner(arm.runner, { baseUrl: arm.baseUrl, retries });
 }
 
 function defaultTools(mode: RunMode): string {
@@ -285,8 +300,9 @@ function compareUsage(): string {
   return [
     "usage: promptdiff compare --scenario <scenario.json> [overrides]",
     "",
-    "Runs baseline and proposed skill sets against the same scenarios, then grades",
-    "each run deterministically and compares pass rates.",
+    "Runs baseline and proposed arms against the same scenarios, then grades",
+    "each run deterministically and compares pass rates. The arms may differ by",
+    "skill set, by model/runner, or both.",
     "",
     "overrides: --agent <file.md> --baseline <SKILL.md>... --proposed <SKILL.md>...",
     "           --delivery <inline|install> (install: skills land in the sandbox",
@@ -294,8 +310,17 @@ function compareUsage(): string {
     "           --runner <claude-p|openai> --base-url <url> (openai: text-graded",
     "           scenarios against any OpenAI-compatible endpoint)",
     "           --model <model> --runs <n> --sandbox <dir> --keep-sandbox",
+    "           --baseline-model <m> --proposed-model <m>",
+    "           --baseline-runner <r> --proposed-runner <r>",
     "           --mode <text|artifact> --tools <tools|default|''>",
     "           --timeout-ms <ms> --max-budget-usd <usd>",
+    "",
+    "model comparison:",
+    "  hold the skills constant and vary the model per arm. A top-level \"skills\"",
+    "  array is inherited by both arms, and the record form of \"baseline\"/",
+    "  \"proposed\" accepts per-arm \"model\", \"runner\", and \"baseUrl\" (each falls",
+    "  back to the shared top-level value). --baseline-model/--proposed-model and",
+    "  --baseline-runner/--proposed-runner override per arm from the CLI.",
     "",
     "runs:",
     "  scenario-level \"runs\": 5 means 5 baseline runs and 5 proposed runs per case.",
@@ -314,6 +339,8 @@ function compareUsage(): string {
     "assertions:",
     "  target      baseline must not fully pass; proposed must beat baseline pass rate",
     "  regression  proposed must not fall below baseline pass rate",
+    "  compare     no assertion — reports both arms' pass rates and the delta",
+    "              (for model-vs-model diffs with no directional claim)",
     "",
     "minimal scenario:",
     "  {",

@@ -5,7 +5,7 @@ import { deliveryValue, type Delivery } from "./skill-install";
 import { runnerNameValue, type RunnerName } from "../runner";
 import type { RunMode } from "../types";
 
-export type ScenarioKind = "target" | "regression";
+export type ScenarioKind = "target" | "regression" | "compare";
 
 export interface EvalCaseConfig {
   name: string;
@@ -21,20 +21,25 @@ export interface EvalCaseConfig {
   tools?: string;
 }
 
+/** Model/runner/endpoint one arm runs against, resolved from per-arm and shared fields. */
+export interface ArmConfig {
+  model: string;
+  runner: RunnerName;
+  /** OpenAI-compatible endpoint base URL; only meaningful for the openai runner. */
+  baseUrl?: string;
+}
+
 export interface CompareConfig {
   name: string;
   agent: string;
   baselineSkills: string[];
   proposedSkills: string[];
   delivery: Delivery;
-  runner: RunnerName;
-  /** OpenAI-compatible endpoint base URL; only meaningful for the openai runner. */
-  baseUrl?: string;
+  arms: { baseline: ArmConfig; proposed: ArmConfig };
   /** Extra chat-request body fields (max_tokens, temperature, ...); openai runner only. */
   requestParams?: Record<string, unknown>;
   /** Timeout retries per model call; openai runner only. Default 0. */
   retries?: number;
-  model: string;
   runs: number;
   timeoutMs: number;
   maxBudgetUsd: number;
@@ -53,8 +58,12 @@ export interface CompareOverrides {
   proposedSkills?: string[];
   delivery?: Delivery;
   runner?: RunnerName;
+  baselineRunner?: RunnerName;
+  proposedRunner?: RunnerName;
   baseUrl?: string;
   model?: string;
+  baselineModel?: string;
+  proposedModel?: string;
   runs?: number;
   timeoutMs?: number;
   maxBudgetUsd?: number;
@@ -69,6 +78,7 @@ export interface CompareOverrides {
 interface RawCompareConfig {
   name?: unknown;
   agent?: unknown;
+  skills?: unknown;
   baselineSkills?: unknown;
   proposedSkills?: unknown;
   baseline?: unknown;
@@ -111,8 +121,11 @@ export function loadCompareConfig(path: string, overrides: CompareOverrides = {}
   const baseDir = dirname(configPath);
   const raw = JSON.parse(readFileSync(configPath, "utf8")) as RawCompareConfig;
 
-  const baselineSkills = overrides.baselineSkills ?? normalizeSkills(raw.baselineSkills ?? raw.baseline, "baseline");
-  const proposedSkills = overrides.proposedSkills ?? normalizeSkills(raw.proposedSkills ?? raw.proposed, "proposed");
+  const sharedSkills = raw.skills === undefined ? undefined : stringArray(raw.skills, "skills");
+  const rawBaseline = raw.baselineSkills ?? raw.baseline;
+  const rawProposed = raw.proposedSkills ?? raw.proposed;
+  const baselineSkills = overrides.baselineSkills ?? normalizeSkills(rawBaseline, "baseline", sharedSkills);
+  const proposedSkills = overrides.proposedSkills ?? normalizeSkills(rawProposed, "proposed", sharedSkills);
 
   const rawSandbox = isRecord(raw.sandbox) ? raw.sandbox : {};
   const sandboxRoot = overrides.sandboxRoot ?? resolveFrom(baseDir, stringValue(rawSandbox.root, ".promptdiff/runs"));
@@ -137,11 +150,12 @@ export function loadCompareConfig(path: string, overrides: CompareOverrides = {}
     baselineSkills: baselineSkills.map((skill) => resolveFrom(baseDir, skill)),
     proposedSkills: proposedSkills.map((skill) => resolveFrom(baseDir, skill)),
     delivery: overrides.delivery ?? deliveryValue(raw.delivery, "inline"),
-    runner: overrides.runner ?? runnerNameValue(raw.runner, "claude-p"),
-    baseUrl: overrides.baseUrl ?? stringValue(raw.baseUrl, undefined),
+    arms: {
+      baseline: resolveArm("baseline", armRecord(rawBaseline), raw, overrides),
+      proposed: resolveArm("proposed", armRecord(rawProposed), raw, overrides),
+    },
     requestParams: raw.requestParams === undefined ? undefined : recordOf(raw.requestParams, "requestParams"),
     retries: raw.retries === undefined ? undefined : numberValue(raw.retries, 0),
-    model: overrides.model ?? requiredString(raw.model, "model"),
     runs: overrides.runs ?? numberValue(raw.runs, 5),
     timeoutMs: overrides.timeoutMs ?? numberValue(raw.timeoutMs, 600_000),
     maxBudgetUsd: overrides.maxBudgetUsd ?? numberValue(raw.maxBudgetUsd, 1),
@@ -211,12 +225,40 @@ function validateCompareConfig(config: CompareConfig): void {
   }
 }
 
-function normalizeSkills(value: unknown, label: string): string[] {
+function normalizeSkills(value: unknown, label: string, sharedSkills: string[] | undefined): string[] {
   if (Array.isArray(value)) return value.map((item) => requiredString(item, `${label} skill`));
   if (isRecord(value) && Array.isArray(value.skills)) {
     return value.skills.map((item) => requiredString(item, `${label}.skills item`));
   }
+  // An arm without its own skills inherits the shared top-level set (model diffs).
+  if (sharedSkills !== undefined && (value === undefined || (isRecord(value) && value.skills === undefined))) {
+    return sharedSkills;
+  }
   throw new Error(`compare requires ${label} skill paths`);
+}
+
+/** Resolves one arm's model/runner/baseUrl: per-arm override, per-arm field, shared override, shared field. */
+function resolveArm(
+  arm: "baseline" | "proposed",
+  rawArm: Record<string, unknown>,
+  raw: RawCompareConfig,
+  overrides: CompareOverrides,
+): ArmConfig {
+  const modelOverride = arm === "baseline" ? overrides.baselineModel : overrides.proposedModel;
+  const runnerOverride = arm === "baseline" ? overrides.baselineRunner : overrides.proposedRunner;
+  const model = modelOverride ?? stringValue(rawArm.model, overrides.model ?? stringValue(raw.model, undefined));
+  if (model === undefined) {
+    throw new Error(`model is required (top-level "model" or ${arm}.model)`);
+  }
+  return {
+    model,
+    runner: runnerOverride ?? runnerNameValue(rawArm.runner, overrides.runner ?? runnerNameValue(raw.runner, "claude-p")),
+    baseUrl: stringValue(rawArm.baseUrl, overrides.baseUrl ?? stringValue(raw.baseUrl, undefined)),
+  };
+}
+
+function armRecord(value: unknown): Record<string, unknown> {
+  return isRecord(value) && !Array.isArray(value) ? value : {};
 }
 
 function graderValue(value: unknown, scenarioName: string): GraderSpec {
@@ -255,8 +297,8 @@ function graderValue(value: unknown, scenarioName: string): GraderSpec {
 
 function kindValue(value: unknown, fallback: ScenarioKind): ScenarioKind {
   if (value === undefined) return fallback;
-  if (value === "target" || value === "regression") return value;
-  throw new Error(`scenario kind must be "target" or "regression"`);
+  if (value === "target" || value === "regression" || value === "compare") return value;
+  throw new Error(`scenario kind must be "target", "regression", or "compare"`);
 }
 
 function modeValue(value: unknown, fallback: RunMode | undefined): RunMode | undefined {

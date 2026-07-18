@@ -110,14 +110,28 @@ requires tools and is incompatible with `--tools ""`.
 Known contamination source in install mode: same-named user-level skills load
 in both arms; the installer warns when it detects one.
 
+**Model as the A/B variable.** The arms can also differ by model, runner, or
+endpoint instead of (or in addition to) skill text. A shared top-level
+`"skills"` array holds the instruction set constant, and the record form of
+`"baseline"`/`"proposed"` carries per-arm `"model"`, `"runner"`, and
+`"baseUrl"` (each falling back to the shared top-level value). Each arm is
+validated against its own runner's capabilities before any paid run, and the
+summary labels each arm with its model (and runner, when they differ).
+
+Cross-runner confound: a claude-p arm is agentic — tools, multiple turns —
+while an openai arm is a single completion. Pass rates on text-graded
+scenarios compare meaningfully, but the mechanics differ and cost does not
+compare at all (the openai runner reports $0; the summary notes this when
+exactly one arm is openai).
+
 ## 5. Scenario Format
 
 A compare file defines:
 
 - agent file
-- baseline skill files
+- baseline skill files (or a shared skill set both arms inherit)
 - proposed skill files
-- model
+- model (shared, or per arm for model comparisons)
 - run count
 - sandbox root and optional seed workspace
 - target and regression scenarios
@@ -134,6 +148,10 @@ Target assertions:
 Regression assertions:
 
 1. proposed must not fall below baseline pass rate
+
+`compare` scenarios assert nothing: they exist to report both arms' pass
+rates and the delta, for comparisons (typically model-vs-model) where neither
+direction is claimed in advance.
 
 ## 6. Grading
 
