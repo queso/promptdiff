@@ -34,16 +34,13 @@ each output deterministically, and reports pass rates and cost.
 
 ## Install
 
-From npm:
+The npm package (`@the-ai-team/promptdiff`) is coming soon. Until then,
+install from a checkout:
 
 ```bash
-bun add -g @the-ai-team/promptdiff
-```
-
-or:
-
-```bash
-npm install -g @the-ai-team/promptdiff
+git clone https://github.com/queso/promptdiff
+cd promptdiff
+bun install
 ```
 
 Runtime requirements:
@@ -51,18 +48,6 @@ Runtime requirements:
 ```bash
 bun --version
 claude --version   # only for the default claude-p runner
-```
-
-Then run:
-
-```bash
-promptdiff --help
-```
-
-From a checkout:
-
-```bash
-bun install
 ```
 
 Run from the repo:
@@ -233,7 +218,7 @@ questions:
 ```bash
 ./promptdiff run \
   --agent ./agents/probe.md \
-  --skill ../Cortex/skills/cortex \
+  --skill ./skills/deploy-checklist \
   --delivery install \
   --model sonnet \
   --prompt "Where should this app be deployed?"
@@ -278,6 +263,12 @@ Command graders run inside the per-run sandbox. They grade files the agent
 wrote there, so they need a tool-capable runner (claude-p); text graders work
 with every runner.
 
+## Security note
+
+Command graders execute arbitrary shell commands from scenario files (inside
+the per-run sandbox, but with your local permissions). Only run scenario files
+you trust.
+
 ## Development
 
 ```bash
@@ -288,3 +279,7 @@ bun run check
 
 See [SPEC.md](./SPEC.md) for design notes, limitations, and the reasoning behind
 inlining skill variants into the system prompt.
+
+## License
+
+[MIT](./LICENSE)
