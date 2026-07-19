@@ -1,0 +1,26 @@
+# Nitpick PR review — multi-station review flow on the Conduit kernel.
+# Same-owner repo (queso), so the private reusable workflow is consumed directly with
+# upstream defaults: auto model routing, 5 reviewer domains, spend report in the job
+# summary, failure post-mortem, and acknowledged-finding suppression.
+#
+# Public-repo note: fork PRs don't receive secrets, so the job is guarded to same-repo
+# PRs — external contributors' PRs skip review instead of failing on a missing key.
+#
+# Requires: repo secret FIREWORKS_AI_API_KEY; the ghcr.io/queso/nitpick-flow package
+# readable by this repo's GITHUB_TOKEN.
+name: Nitpick PR Review
+
+on:
+  pull_request:
+    types: [opened, reopened, ready_for_review, synchronize]
+
+jobs:
+  nitpick:
+    if: github.event.pull_request.head.repo.full_name == github.repository
+    uses: queso/nitpick-flow/.github/workflows/nitpick.yml@main
+    permissions:
+      contents: read
+      pull-requests: write
+      packages: read
+    secrets:
+      conduit_api_key: ${{ secrets.FIREWORKS_AI_API_KEY }}
