@@ -198,6 +198,53 @@ Useful overrides:
 must not fully pass and proposed must improve the pass rate. For regression
 scenarios, proposed must not fall below baseline.
 
+## Comparing models
+
+The A/B variable does not have to be the skill text. Hold the prompt and
+skills constant and vary the model — or the runner and endpoint — per arm:
+
+```json
+{
+  "name": "sonnet vs local llama3.1",
+  "agent": "./agents/ba.md",
+  "skills": ["./skills/defensive-coding/SKILL.md"],
+  "baseline": { "model": "sonnet", "runner": "claude-p" },
+  "proposed": {
+    "model": "llama3.1",
+    "runner": "openai",
+    "baseUrl": "http://localhost:11434/v1"
+  },
+  "runs": 5,
+  "scenarios": [
+    {
+      "name": "validation-explanation",
+      "kind": "compare",
+      "prompt": "Explain how you would validate POST /api/items.",
+      "grader": { "type": "text", "contains": ["status"], "notContains": ["TODO"] }
+    }
+  ]
+}
+```
+
+- A top-level `"skills"` array is inherited by both arms when an arm defines
+  none of its own; each arm may still bring its own `"skills"`.
+- The record form of `"baseline"`/`"proposed"` accepts `"model"`, `"runner"`,
+  and `"baseUrl"`, each falling back to the shared top-level value.
+- `"kind": "compare"` makes no directional claim: it never fails the run, it
+  just reports both arms' pass rates and the delta. Target and regression
+  scenarios still work in model comparisons if you do want an assertion.
+- `--baseline-model`/`--proposed-model` and
+  `--baseline-runner`/`--proposed-runner` override per arm from the CLI.
+
+Each arm is validated against its own runner's capabilities before any paid
+run, so an openai arm still rejects command graders, tools, artifact mode,
+and install delivery up front.
+
+Two caveats when the arms use different runners: claude-p arms are agentic
+(tools, multiple turns) while openai arms are single completions, so pass
+rates compare but the mechanics differ; and the openai runner reports $0 cost
+(tokens only), so the summary flags the cost columns as not comparable.
+
 ## Delivery: inline vs install
 
 Two ways to put the skill under test in front of the agent, for two different

@@ -1,6 +1,6 @@
 import { assembleSystemPrompt } from "../prompt";
 import type { Runner, RunnerRunOptions, RunResult } from "../types";
-import type { CompareConfig, EvalCaseConfig } from "./config";
+import type { ArmConfig, CompareConfig, EvalCaseConfig, ScenarioKind } from "./config";
 import { gradeRun, type GradeResult } from "./grader";
 import { prepareSandbox } from "./sandbox";
 import { installSkills } from "./skill-install";
@@ -27,7 +27,7 @@ export interface ArmSummary {
 
 export interface CaseSummary {
   name: string;
-  kind: "target" | "regression";
+  kind: ScenarioKind;
   baseline: ArmSummary;
   proposed: ArmSummary;
   assertions: string[];
@@ -35,6 +35,7 @@ export interface CaseSummary {
 
 export interface CompareSummary {
   name: string;
+  arms: { baseline: ArmConfig; proposed: ArmConfig };
   cases: CaseSummary[];
   failedAssertions: string[];
   totalCostUsd: number;
@@ -42,13 +43,16 @@ export interface CompareSummary {
 
 export interface CompareRunOptions {
   config: CompareConfig;
-  runner: Runner;
+  runners: { baseline: Runner; proposed: Runner };
   onProgress?: (message: string) => void;
 }
 
 export async function runCompare(options: CompareRunOptions): Promise<CompareSummary> {
-  const { config, runner, onProgress } = options;
-  validateRunnerSupport(config, runner);
+  const { config, runners, onProgress } = options;
+  // Validate each arm against its own runner — a mixed comparison fails on the
+  // violating arm before either arm's paid runs.
+  validateRunnerSupport(config, runners.baseline);
+  validateRunnerSupport(config, runners.proposed);
   // Install delivery keeps skill text out of the system prompt entirely — the
   // arms differ only by which skill directory lands in the sandbox registry.
   const inline = config.delivery !== "install";
@@ -58,8 +62,8 @@ export async function runCompare(options: CompareRunOptions): Promise<CompareSum
 
   for (const evalCase of config.cases) {
     onProgress?.(`scenario ${evalCase.name} (${evalCase.kind})`);
-    const baseline = await runArm(config, evalCase, "baseline", baselinePrompt, runner, onProgress);
-    const proposed = await runArm(config, evalCase, "proposed", proposedPrompt, runner, onProgress);
+    const baseline = await runArm(config, evalCase, "baseline", baselinePrompt, runners.baseline, onProgress);
+    const proposed = await runArm(config, evalCase, "proposed", proposedPrompt, runners.proposed, onProgress);
     cases.push({
       name: evalCase.name,
       kind: evalCase.kind,
@@ -79,6 +83,7 @@ export async function runCompare(options: CompareRunOptions): Promise<CompareSum
 
   return {
     name: config.name,
+    arms: config.arms,
     cases,
     failedAssertions,
     totalCostUsd,
@@ -87,6 +92,8 @@ export async function runCompare(options: CompareRunOptions): Promise<CompareSum
 
 export function formatCompareSummary(summary: CompareSummary): string {
   const lines = [`promptdiff compare: ${summary.name}`];
+  const baselineLabel = armLabel("baseline", summary.arms);
+  const proposedLabel = armLabel("proposed", summary.arms);
 
   for (const caseSummary of summary.cases) {
     const deltaPass = caseSummary.proposed.passRate - caseSummary.baseline.passRate;
@@ -94,8 +101,8 @@ export function formatCompareSummary(summary: CompareSummary): string {
     lines.push(
       "",
       `${caseSummary.name} (${caseSummary.kind})`,
-      `  baseline: ${caseSummary.baseline.passes}/${caseSummary.baseline.totalRuns} pass (${formatPct(caseSummary.baseline.passRate)}) | $${caseSummary.baseline.totalCostUsd.toFixed(4)}`,
-      `  proposed: ${caseSummary.proposed.passes}/${caseSummary.proposed.totalRuns} pass (${formatPct(caseSummary.proposed.passRate)}) | $${caseSummary.proposed.totalCostUsd.toFixed(4)}`,
+      `  ${baselineLabel}: ${caseSummary.baseline.passes}/${caseSummary.baseline.totalRuns} pass (${formatPct(caseSummary.baseline.passRate)}) | $${caseSummary.baseline.totalCostUsd.toFixed(4)}`,
+      `  ${proposedLabel}: ${caseSummary.proposed.passes}/${caseSummary.proposed.totalRuns} pass (${formatPct(caseSummary.proposed.passRate)}) | $${caseSummary.proposed.totalCostUsd.toFixed(4)}`,
       `  delta: ${deltaPass >= 0 ? "+" : ""}${formatPct(deltaPass)} pass | ${deltaCost >= 0 ? "+" : ""}$${deltaCost.toFixed(4)}`,
     );
 
@@ -103,12 +110,17 @@ export function formatCompareSummary(summary: CompareSummary): string {
       for (const assertion of caseSummary.assertions) {
         lines.push(`  FAIL: ${assertion}`);
       }
+    } else if (caseSummary.kind === "compare") {
+      lines.push("  INFO: no assertion (kind \"compare\")");
     } else {
       lines.push("  PASS: assertions satisfied");
     }
   }
 
   lines.push("", `total cost: $${summary.totalCostUsd.toFixed(4)}`);
+  if ((summary.arms.baseline.runner === "openai") !== (summary.arms.proposed.runner === "openai")) {
+    lines.push("note: cost columns are not comparable — the openai runner reports $0 (tokens only)");
+  }
   if (summary.failedAssertions.length > 0) {
     lines.push("failed assertions:");
     for (const assertion of summary.failedAssertions) {
@@ -117,6 +129,14 @@ export function formatCompareSummary(summary: CompareSummary): string {
   }
 
   return lines.join("\n");
+}
+
+/** Bare arm name when the arms match; annotated with model (and runner when runners differ) otherwise. */
+function armLabel(name: "baseline" | "proposed", arms: { baseline: ArmConfig; proposed: ArmConfig }): string {
+  const runnersDiffer = arms.baseline.runner !== arms.proposed.runner;
+  if (!runnersDiffer && arms.baseline.model === arms.proposed.model) return name;
+  const arm = arms[name];
+  return runnersDiffer ? `${name} (${arm.model} via ${arm.runner})` : `${name} (${arm.model})`;
 }
 
 /**
@@ -178,7 +198,7 @@ async function runArm(
           }
         }
       }
-      const run = await runner.run(buildRunnerOptions(config, evalCase, systemPrompt, sandbox.dir));
+      const run = await runner.run(buildRunnerOptions(config, evalCase, arm, systemPrompt, sandbox.dir));
       const grade = await gradeRun(evalCase.grader, { run, sandboxDir: sandbox.dir });
       summaries.push(toArmRunSummary(index + 1, run, grade, sandbox.dir));
     } finally {
@@ -201,6 +221,7 @@ async function runArm(
 function buildRunnerOptions(
   config: CompareConfig,
   evalCase: EvalCaseConfig,
+  arm: "baseline" | "proposed",
   systemPrompt: string,
   cwd: string,
 ): RunnerRunOptions {
@@ -210,7 +231,7 @@ function buildRunnerOptions(
     userPrompt: evalCase.prompt,
     images: evalCase.images,
     requestParams: config.requestParams,
-    model: config.model,
+    model: config.arms[arm].model,
     cwd,
     addDirs: [...config.addDirs, ...evalCase.addDirs],
     tools: effectiveTools(config, evalCase),
@@ -250,6 +271,11 @@ function evaluateAssertions(
   baseline: ArmSummary,
   proposed: ArmSummary,
 ): string[] {
+  // "compare" scenarios report pass rates and the delta with no directional claim.
+  if (evalCase.kind === "compare") {
+    return [];
+  }
+
   if (evalCase.kind === "target") {
     const failures = [];
     if (baseline.passRate >= 1) {

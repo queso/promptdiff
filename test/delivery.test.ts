@@ -46,8 +46,10 @@ test("install delivery puts arm skills in each sandbox registry and keeps them o
       baselineSkills: [baseline],
       proposedSkills: [proposed],
       delivery: "install",
-      runner: "claude-p",
-      model: "sonnet",
+      arms: {
+        baseline: { model: "sonnet", runner: "claude-p" },
+        proposed: { model: "sonnet", runner: "claude-p" },
+      },
       runs: 1,
       timeoutMs: 1_000,
       maxBudgetUsd: 1,
@@ -66,7 +68,7 @@ test("install delivery puts arm skills in each sandbox registry and keeps them o
       ],
     };
 
-    const summary = await runCompare({ config, runner });
+    const summary = await runCompare({ config, runners: { baseline: runner, proposed: runner } });
     expect(summary.cases[0]?.baseline.passRate).toBe(0);
     expect(summary.cases[0]?.proposed.passRate).toBe(1);
     // Arms differ only by the installed variant — no skill text leaks into prompts.
