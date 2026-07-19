@@ -36,9 +36,12 @@ prompt + bounds in, `RunResult` (output text, cost, turns, duration, models)
 out. Each runner declares capabilities:
 
 - `sandboxTools`: the runner executes tools inside the sandbox cwd (needed for
-  artifact mode, command graders, and any non-empty tools list)
+  artifact mode, command graders against agent-written files, and any
+  non-empty tools list)
 - `skillRegistry`: the runner has a harness-managed skill registry and an
   appendable default system prompt (needed for install delivery)
+- `images`: the runner can attach image files to the user message (needed for
+  scenarios with `images` / `run --image`)
 
 The engine validates a scenario's demands against the selected runner's
 capabilities before any paid run, so unsupported combinations fail loudly at
@@ -77,6 +80,16 @@ Text mode only — no tools, no sandbox execution, no skill registry, so it pair
 with text graders. Cost is reported as 0 (these endpoints report tokens, not
 USD; token usage is preserved in the raw result), and each run is exactly one
 completion, so the budget bound is structural rather than enforced.
+
+Vision: this is the only runner declaring the `images` capability. Scenario
+`images` (or `run --image`) are embedded as base64 data-URI `image_url`
+content parts ahead of the prompt text — jpg/jpeg/png/webp/gif, validated for
+existence at load time. Two scenario fields tune the endpoint: `requestParams`
+merges extra fields into the request body (spread first, so it can never
+clobber `model` or `messages` — pin `temperature` here to keep pass-rate
+deltas about the prompt), and `retries` re-attempts timed-out or
+connection-failed requests for flaky local servers while HTTP errors and
+malformed responses still fail immediately.
 
 ## 4. A/B Variable
 
@@ -157,9 +170,12 @@ direction is claimed in advance.
 
 Prefer deterministic graders over LLM judges.
 
-Text graders inspect Claude's final output. Command graders run inside the
+Text graders inspect the run's final output. Command graders run inside the
 sandbox after the model invocation and check the exit code of a local command
-such as `bun test`, `go test ./...`, or a fixture-specific script.
+such as `bun test`, `go test ./...`, or a fixture-specific script. The final
+output is also written into the sandbox and exposed to command graders as
+`$PROMPTDIFF_OUTPUT_FILE`, so completion-only runs can be command-graded
+(scenario `mode: "text"` keeps the tools demand at zero).
 
 LLM judges are intentionally not implemented yet. They would add a second billed
 call per run and should be reserved for cases that cannot be expressed as local

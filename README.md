@@ -107,6 +107,53 @@ delivery are rejected up front — before any paid run — with an error telling
 you to use claude-p. In a scenario file, select it with top-level
 `"runner": "openai"` and optionally `"baseUrl": "..."`.
 
+### Vision evals (VLMs)
+
+The openai runner can attach images to the user message, so prompt A/B tests
+work against vision-language models too. On `run`, pass `--image`
+(repeatable):
+
+```bash
+./promptdiff run \
+  --runner openai \
+  --base-url http://localhost:11434/v1 \
+  --model qwen2.5vl \
+  --agent ./agents/alt-text.md \
+  --image ./fixtures/screenshot.png \
+  --prompt "Write alt text for this screenshot."
+```
+
+In a scenario file, any scenario may list `"images"`:
+
+```json
+{
+  "name": "alt-text-quality",
+  "kind": "target",
+  "prompt": "Write alt text for this screenshot.",
+  "images": ["./fixtures/screenshot.png"],
+  "grader": { "type": "text", "notContains": ["image of"] }
+}
+```
+
+Image paths resolve relative to the scenario file and are checked at load
+time, so a missing file fails before any paid run. Supported formats: jpg,
+jpeg, png, webp, gif. Files are embedded as base64 data URIs — no upload
+endpoint needed, so local servers (ollama, vLLM) work as-is. The claude-p
+runner does not support image attachment; a scenario with `images` on a
+claude-p arm is rejected up front.
+
+### Endpoint options (scenario file)
+
+Two more top-level scenario fields tune the openai runner in `compare`:
+
+- `"requestParams": { "max_tokens": 512, "temperature": 0 }` — extra fields
+  merged into the chat-completions request body (they can never clobber
+  `model` or `messages`). Useful for pinning temperature so pass-rate deltas
+  reflect the prompt, not sampling noise.
+- `"retries": 2` — extra attempts after a timeout or connection failure,
+  for flaky local endpoints. HTTP errors and malformed responses still fail
+  immediately. Default 0.
+
 ## Single Run
 
 Text-only eval:
@@ -306,9 +353,27 @@ Command grader:
 }
 ```
 
-Command graders run inside the per-run sandbox. They grade files the agent
-wrote there, so they need a tool-capable runner (claude-p); text graders work
-with every runner.
+Command graders run inside the per-run sandbox. Typically they grade files
+the agent wrote there, which needs a tool-capable runner (claude-p); text
+graders work with every runner.
+
+Every command grader also receives the run's final output, written into the
+sandbox and exposed as `$PROMPTDIFF_OUTPUT_FILE`. That means completion-style
+runs (openai runner) can be command-graded too — set `"mode": "text"` on the
+scenario so no tools are demanded, and script against the file:
+
+```json
+{
+  "name": "structured-answer",
+  "kind": "target",
+  "mode": "text",
+  "prompt": "Reply with JSON: {\"status\": ...}",
+  "grader": {
+    "type": "command",
+    "command": "jq -e '.status == \"ok\"' \"$PROMPTDIFF_OUTPUT_FILE\""
+  }
+}
+```
 
 ## Security note
 
