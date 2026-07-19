@@ -2,6 +2,15 @@
   "name": "@the-ai-team/promptdiff",
   "version": "0.0.1",
   "description": "A/B test harness for LLM prompt and skill changes — headless Claude Code or any OpenAI-compatible endpoint.",
+  "author": "Josh Owens <josh@theaiteam.dev>",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/queso/promptdiff.git"
+  },
+  "homepage": "https://github.com/queso/promptdiff#readme",
+  "bugs": {
+    "url": "https://github.com/queso/promptdiff/issues"
+  },
   "type": "module",
   "packageManager": "bun@1.3.11",
   "bin": {
