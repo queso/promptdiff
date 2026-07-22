@@ -5,10 +5,12 @@ import type { RunResult, Runner, RunnerRunOptions } from "../types";
 
 interface ClaudeJsonResult {
   result?: unknown;
+  subtype?: unknown;
   total_cost_usd?: unknown;
   num_turns?: unknown;
   duration_ms?: unknown;
   modelUsage?: unknown;
+  errors?: unknown;
 }
 
 export function buildClaudeArgs(options: RunnerRunOptions & { systemPromptFile: string }): string[] {
@@ -91,7 +93,7 @@ export class ClaudePrintRunner implements Runner {
         throw new Error(`claude timed out after ${options.timeoutMs}ms`);
       }
       if (code !== 0) {
-        throw new Error(`claude exited ${code}: ${stderr.slice(0, 1_500)}`);
+        throw new Error(describeClaudeFailure(code, stdout, stderr, options.maxBudgetUsd));
       }
 
       let parsed: ClaudeJsonResult;
@@ -107,6 +109,38 @@ export class ClaudePrintRunner implements Runner {
       rmSync(promptDir, { recursive: true, force: true });
     }
   }
+}
+
+/**
+ * A budget abort exits 1 with EMPTY stderr but a full JSON result on stdout
+ * ("subtype": "error_max_budget_usd") — without decoding it, the failure is
+ * indistinguishable from a crash and has cost real debug cycles.
+ */
+export function describeClaudeFailure(
+  code: number,
+  stdout: string,
+  stderr: string,
+  maxBudgetUsd: number,
+): string {
+  let parsed: ClaudeJsonResult | undefined;
+  try {
+    parsed = JSON.parse(stdout) as ClaudeJsonResult;
+  } catch {
+    // Not JSON — fall through to the raw-stream message.
+  }
+
+  if (parsed && typeof parsed === "object") {
+    if (parsed.subtype === "error_max_budget_usd") {
+      const spent = typeof parsed.total_cost_usd === "number" ? ` after spending $${parsed.total_cost_usd.toFixed(4)}` : "";
+      return `claude hit the $${maxBudgetUsd} max budget${spent} — raise --max-budget-usd / maxBudgetUsd (the cap is checked between turns, so artifact-mode runs need headroom)`;
+    }
+    if (Array.isArray(parsed.errors) && parsed.errors.length > 0) {
+      return `claude exited ${code}: ${parsed.errors.map(String).join("; ").slice(0, 1_500)}`;
+    }
+  }
+
+  const detail = stderr.trim().length > 0 ? stderr : stdout;
+  return `claude exited ${code}: ${detail.slice(0, 1_500)}`;
 }
 
 function normalizeClaudeResult(result: ClaudeJsonResult): RunResult {

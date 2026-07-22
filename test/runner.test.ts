@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { buildClaudeArgs } from "../src/runner/claude-p";
+import { buildClaudeArgs, describeClaudeFailure } from "../src/runner/claude-p";
 
 test("buildClaudeArgs uses a system prompt file, budget, tools, and add-dir", () => {
   const args = buildClaudeArgs({
@@ -111,4 +111,39 @@ test("buildClaudeArgs sets acceptEdits so artifact-mode agents can write outputs
   const i = args.indexOf("--permission-mode");
   expect(i).toBeGreaterThan(-1);
   expect(args[i + 1]).toBe("acceptEdits");
+});
+
+// Captured from a real budget abort (claude -p --max-budget-usd 0.001): exit 1,
+// empty stderr, full JSON result on stdout.
+const BUDGET_ABORT_STDOUT = JSON.stringify({
+  type: "result",
+  subtype: "error_max_budget_usd",
+  is_error: true,
+  num_turns: 1,
+  total_cost_usd: 0.0287771,
+  terminal_reason: "budget_exhausted",
+  errors: ["Reached maximum budget ($0.001)"],
+});
+
+test("describeClaudeFailure names a budget abort instead of a bare exit code", () => {
+  const message = describeClaudeFailure(1, BUDGET_ABORT_STDOUT, "", 0.001);
+  expect(message).toContain("max budget");
+  expect(message).toContain("$0.0288");
+  expect(message).toContain("raise --max-budget-usd");
+  expect(message).not.toContain("claude exited 1");
+});
+
+test("describeClaudeFailure surfaces structured errors and falls back to raw streams", () => {
+  const structured = describeClaudeFailure(
+    1,
+    JSON.stringify({ subtype: "error_during_execution", errors: ["tool Bash crashed"] }),
+    "",
+    1,
+  );
+  expect(structured).toBe("claude exited 1: tool Bash crashed");
+
+  // stderr wins when present; stdout fills in when stderr is empty (the old
+  // message was blank in exactly the case that needed diagnosing).
+  expect(describeClaudeFailure(2, "not json", "boom", 1)).toBe("claude exited 2: boom");
+  expect(describeClaudeFailure(2, "partial output", "", 1)).toBe("claude exited 2: partial output");
 });
