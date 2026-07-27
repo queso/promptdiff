@@ -2,6 +2,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { expect, test } from "bun:test";
+import { varsFromFlags } from "../src/cli";
 import { runCompare } from "../src/engine/compare";
 import { loadCompareConfig } from "../src/engine/config";
 import { placeholderNames, renderStrict, resolveRenderVars } from "../src/engine/render";
@@ -19,6 +20,35 @@ test("renderStrict fails on unbound placeholders, listing every missing name onc
     /unbound template placeholder\(s\) in baseline system prompt: \{\{draft\}\} — bind them in render\.vars/,
   );
   expect(() => renderStrict("{{a}} {{b}}", {}, "t")).toThrow(/\{\{a\}\}, \{\{b\}\}/);
+});
+
+test("renderStrict treats Object.prototype member names as unbound, not as bindings", () => {
+  // `in`/bracket lookups walk the prototype chain: an unbound {{toString}}
+  // would pass the strict check and inject native-function source into a
+  // paid prompt. These must throw like any other unbound name.
+  for (const name of ["toString", "constructor", "valueOf", "hasOwnProperty"]) {
+    expect(() => renderStrict(`{{${name}}}`, {}, "t")).toThrow(`{{${name}}}`);
+  }
+  // And when genuinely bound, they substitute like normal names.
+  expect(renderStrict("{{toString}}", { toString: "BOUND" } as Record<string, string>, "t")).toBe("BOUND");
+});
+
+test("a var named __proto__ binds as a real property", () => {
+  const dir = mkdtempSync(join(tmpdir(), "promptdiff-render-proto-"));
+  try {
+    const vars = resolveRenderVars(JSON.parse('{"__proto__": "PROTOVAL"}') as Record<string, unknown>, dir, "render.vars");
+    expect(renderStrict("{{__proto__}}", vars, "t")).toBe("PROTOVAL");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("renderStrict inserts replacement-pattern sequences and empty strings verbatim", () => {
+  // $&/$1/$$ are String.replace replacement patterns; the function replacer
+  // must keep them literal. A future refactor to a string replacer would
+  // silently corrupt fixture content — this test is the tripwire.
+  expect(renderStrict("[{{d}}]", { d: "$& $1 $$ $' $`" }, "t")).toBe("[$& $1 $$ $' $`]");
+  expect(renderStrict("a{{empty}}b", { empty: "" }, "t")).toBe("ab");
 });
 
 test("renderStrict never re-scans substituted content", () => {
@@ -167,6 +197,50 @@ test("runCompare renders per-case vars into both arms and fails unbound before a
       runCompare({ config: brokenConfig, runners: { baseline: runner, proposed: runner } }),
     ).rejects.toThrow(/unbound template placeholder\(s\) in scenario "case-b"/);
     expect(seenPrompts).toHaveLength(0);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("varsFromFlags parses name=value entries with file-or-literal resolution", () => {
+  const dir = mkdtempSync(join(tmpdir(), "promptdiff-var-flags-"));
+  try {
+    writeFileSync(join(dir, "draft.md"), "FILE CONTENTS", "utf8");
+    const vars = varsFromFlags(["draft=./draft.md", "tone=a=b", "empty="], dir);
+    expect(vars).toEqual({ draft: "FILE CONTENTS", tone: "a=b", empty: "" });
+    expect(varsFromFlags([], dir)).toBeUndefined();
+
+    expect(() => varsFromFlags(["novalue"], dir)).toThrow(/--var must be name=value/);
+    expect(() => varsFromFlags(["=orphan"], dir)).toThrow(/--var must be name=value/);
+    expect(() => varsFromFlags(["x=1", "x=2"], dir)).toThrow(/--var x given more than once/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("run rejects --var with install delivery and hints --var on unbound placeholders", () => {
+  const dir = mkdtempSync(join(tmpdir(), "promptdiff-var-run-"));
+  try {
+    writeFileSync(join(dir, "agent.md"), "Agent {{voice}}", "utf8");
+    mkdirSync(join(dir, "skill"), { recursive: true });
+    writeFileSync(join(dir, "skill", "SKILL.md"), "---\nname: s\ndescription: d\n---\nbody", "utf8");
+
+    const install = Bun.spawnSync(
+      ["./promptdiff", "run", "--agent", join(dir, "agent.md"), "--model", "m", "--prompt", "p",
+        "--skill", join(dir, "skill"), "--delivery", "install", "--var", "voice=v"],
+      { cwd: process.cwd(), stdout: "pipe", stderr: "pipe" },
+    );
+    expect(install.exitCode).toBe(2);
+    expect(install.stderr.toString()).toContain("--var applies to inlined prompt text");
+
+    const unbound = Bun.spawnSync(
+      ["./promptdiff", "run", "--agent", join(dir, "agent.md"), "--model", "m", "--prompt", "p",
+        "--var", "other=v"],
+      { cwd: process.cwd(), stdout: "pipe", stderr: "pipe" },
+    );
+    expect(unbound.exitCode).toBe(1);
+    expect(unbound.stderr.toString()).toContain("{{voice}}");
+    expect(unbound.stderr.toString()).toContain("bind them with --var name=value");
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

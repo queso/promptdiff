@@ -140,8 +140,9 @@ async function cmdRun(argv: string[]): Promise<void> {
 
   try {
     const assembled = assembleSystemPrompt(agent, delivery === "install" ? [] : args.many("skill"));
-    const systemPrompt = renderVars === undefined ? assembled : renderStrict(assembled, renderVars, "system prompt");
-    const userPrompt = renderVars === undefined ? prompt : renderStrict(prompt, renderVars, "prompt");
+    const varHint = "bind them with --var name=value";
+    const systemPrompt = renderVars === undefined ? assembled : renderStrict(assembled, renderVars, "system prompt", varHint);
+    const userPrompt = renderVars === undefined ? prompt : renderStrict(prompt, renderVars, "prompt", varHint);
     if (delivery === "install") {
       const { installed, warnings } = installSkills(args.many("skill"), sandbox.dir);
       console.error(
@@ -247,17 +248,23 @@ function deliveryFromString(value: string | undefined): Delivery {
   throw new CliError("--delivery must be either inline or install");
 }
 
-function varsFromFlags(entries: string[]): RenderVars | undefined {
+export function varsFromFlags(entries: string[], baseDir = process.cwd()): RenderVars | undefined {
   if (entries.length === 0) return undefined;
-  const raw: Record<string, unknown> = {};
+  const raw: Record<string, unknown> = Object.create(null) as Record<string, unknown>;
   for (const entry of entries) {
     const eq = entry.indexOf("=");
     if (eq <= 0) {
       throw new CliError(`--var must be name=value (value is a file path or literal): ${entry}`);
     }
-    raw[entry.slice(0, eq)] = entry.slice(eq + 1);
+    const name = entry.slice(0, eq);
+    // A silently ignored duplicate is exactly the kind of surprise strict
+    // rendering exists to prevent.
+    if (Object.hasOwn(raw, name)) {
+      throw new CliError(`--var ${name} given more than once`);
+    }
+    raw[name] = entry.slice(eq + 1);
   }
-  return resolveRenderVars(raw, process.cwd(), "--var");
+  return resolveRenderVars(raw, baseDir, "--var");
 }
 
 function runnerNameFromString(value: string | undefined): RunnerName {
