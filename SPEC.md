@@ -166,6 +166,19 @@ Regression assertions:
 rates and the delta, for comparisons (typically model-vs-model) where neither
 direction is claimed in advance.
 
+**Template rendering.** `render.vars` — top-level and/or per scenario, with
+the scenario winning per var — binds `{{name}}` placeholders across the agent
+body, inlined skill text, and scenario prompts. This is what lets scenarios
+point at production prompt files (which are full of pipeline placeholders)
+instead of hand-rendered copies that drift. Values resolve file-first
+relative to the scenario file and are read at load time; anything that isn't
+an existing file is a literal. Rendering is opt-in and strict: with any
+`render` block present, unbound placeholders abort before any paid run;
+without one, braces pass through untouched. Substituted content is never
+re-scanned, so fixtures containing braces neither expand recursively nor
+false-positive the unbound check. Incompatible with install delivery, which
+copies skill files verbatim.
+
 ## 6. Grading
 
 Prefer deterministic graders over LLM judges.

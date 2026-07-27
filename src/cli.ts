@@ -4,6 +4,7 @@ import { loadCompareConfig, type ArmConfig, type CompareOverrides } from "./engi
 import { formatCompareSummary, runCompare } from "./engine/compare";
 import { prepareSandbox } from "./engine/sandbox";
 import { installSkills, type Delivery } from "./engine/skill-install";
+import { renderStrict, resolveRenderVars, type RenderVars } from "./engine/render";
 import { assembleSystemPrompt } from "./prompt";
 import { createRunner, RUNNER_NAMES, type RunnerName } from "./runner";
 import type { RunMode, Runner, RunnerRunOptions } from "./types";
@@ -21,6 +22,7 @@ const runSpecs: FlagSpecs = {
   prompt: { arity: "one" },
   "prompt-file": { arity: "one" },
   image: { arity: "one", repeat: true },
+  var: { arity: "one", repeat: true },
   mode: { arity: "one" },
   sandbox: { arity: "one" },
   seed: { arity: "one" },
@@ -124,6 +126,10 @@ async function cmdRun(argv: string[]): Promise<void> {
   if (images.length > 0 && !runner.capabilities.images) {
     throw new CliError(`runner "${runner.name}" cannot attach images — use --runner openai with a vision model`);
   }
+  const renderVars = varsFromFlags(args.many("var"));
+  if (renderVars !== undefined && delivery === "install") {
+    throw new CliError("--var applies to inlined prompt text; --delivery install copies skill files verbatim, so placeholders cannot be bound");
+  }
   const keepSandbox = args.has("keep-sandbox") || (mode === "artifact" && !args.has("clean-sandbox"));
   const sandbox = prepareSandbox({
     root: args.one("sandbox") ?? ".promptdiff/run",
@@ -133,7 +139,10 @@ async function cmdRun(argv: string[]): Promise<void> {
   });
 
   try {
-    const systemPrompt = assembleSystemPrompt(agent, delivery === "install" ? [] : args.many("skill"));
+    const assembled = assembleSystemPrompt(agent, delivery === "install" ? [] : args.many("skill"));
+    const varHint = "bind them with --var name=value";
+    const systemPrompt = renderVars === undefined ? assembled : renderStrict(assembled, renderVars, "system prompt", varHint);
+    const userPrompt = renderVars === undefined ? prompt : renderStrict(prompt, renderVars, "prompt", varHint);
     if (delivery === "install") {
       const { installed, warnings } = installSkills(args.many("skill"), sandbox.dir);
       console.error(
@@ -146,7 +155,7 @@ async function cmdRun(argv: string[]): Promise<void> {
     const runOptions: RunnerRunOptions = {
       systemPrompt,
       systemPromptMode: delivery === "install" ? "append" : "replace",
-      userPrompt: prompt,
+      userPrompt,
       images,
       model,
       cwd: sandbox.dir,
@@ -239,6 +248,25 @@ function deliveryFromString(value: string | undefined): Delivery {
   throw new CliError("--delivery must be either inline or install");
 }
 
+export function varsFromFlags(entries: string[], baseDir = process.cwd()): RenderVars | undefined {
+  if (entries.length === 0) return undefined;
+  const raw: Record<string, unknown> = Object.create(null) as Record<string, unknown>;
+  for (const entry of entries) {
+    const eq = entry.indexOf("=");
+    if (eq <= 0) {
+      throw new CliError(`--var must be name=value (value is a file path or literal): ${entry}`);
+    }
+    const name = entry.slice(0, eq);
+    // A silently ignored duplicate is exactly the kind of surprise strict
+    // rendering exists to prevent.
+    if (Object.hasOwn(raw, name)) {
+      throw new CliError(`--var ${name} given more than once`);
+    }
+    raw[name] = entry.slice(eq + 1);
+  }
+  return resolveRenderVars(raw, baseDir, "--var");
+}
+
 function runnerNameFromString(value: string | undefined): RunnerName {
   if (value === "claude-p" || value === "openai") return value;
   throw new CliError(`--runner must be one of: ${RUNNER_NAMES.join(", ")}`);
@@ -271,8 +299,13 @@ function runUsage(): string {
     "",
     "flags: --skill <SKILL.md|dir>... --delivery <inline|install> --mode <text|artifact>",
     "       --runner <claude-p|openai> --base-url <url> --image <file>...",
-    "       --sandbox <dir> --seed <dir> --tools <tools|default|''>",
-    "       --timeout-ms <ms> --max-budget-usd <usd>",
+    "       --var <name=value>... --sandbox <dir> --seed <dir>",
+    "       --tools <tools|default|''> --timeout-ms <ms> --max-budget-usd <usd>",
+    "",
+    "templates:",
+    "  --var draft=./fixture.md binds {{draft}} in the agent, skills, and prompt;",
+    "  values naming an existing file are read as contents, otherwise used as",
+    "  literals. With any --var set, unbound {{placeholders}} fail before the run.",
     "",
     "runners:",
     "  claude-p  (default) headless Claude Code — supports tools, artifact mode,",
@@ -335,6 +368,14 @@ function compareUsage(): string {
     "  a scenario may set \"images\": [\"photo.jpg\", ...] (paths relative to the",
     "  scenario file) to attach images to the user message — openai runner +",
     "  vision model only",
+    "",
+    "templates:",
+    "  top-level \"render\": { \"vars\": { \"draft\": \"./fixtures/a.md\" } } binds",
+    "  {{draft}} in the agent, inlined skills, and scenario prompts, so scenarios",
+    "  can point at production prompt files with placeholders. Values naming an",
+    "  existing file (relative to the scenario) are read as contents, otherwise",
+    "  used as literals. Scenarios may add their own \"render\" (scenario wins per",
+    "  var). Unbound placeholders fail before any paid run. Inline delivery only.",
     "",
     "assertions:",
     "  target      baseline must not fully pass; proposed must beat baseline pass rate",
