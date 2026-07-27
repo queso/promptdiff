@@ -1,6 +1,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import type { GraderSpec } from "./grader";
+import { resolveRenderVars, type RenderVars } from "./render";
 import { deliveryValue, type Delivery } from "./skill-install";
 import { runnerNameValue, type RunnerName } from "../runner";
 import type { RunMode } from "../types";
@@ -14,6 +15,8 @@ export interface EvalCaseConfig {
   grader: GraderSpec;
   /** Image file paths attached to the user message (vision evals; openai runner only). */
   images: string[];
+  /** Per-scenario template bindings; merged over the top-level set (scenario wins). */
+  renderVars?: RenderVars;
   runs?: number;
   seed?: string;
   addDirs: string[];
@@ -40,6 +43,12 @@ export interface CompareConfig {
   requestParams?: Record<string, unknown>;
   /** Timeout retries per model call; openai runner only. Default 0. */
   retries?: number;
+  /**
+   * Template bindings for {{name}} placeholders in the agent, inlined skills,
+   * and scenario prompts. Presence (even empty) turns on strict rendering:
+   * unbound placeholders fail before any paid run.
+   */
+  renderVars?: RenderVars;
   runs: number;
   timeoutMs: number;
   maxBudgetUsd: number;
@@ -88,6 +97,7 @@ interface RawCompareConfig {
   baseUrl?: unknown;
   requestParams?: unknown;
   retries?: unknown;
+  render?: unknown;
   model?: unknown;
   runs?: unknown;
   timeoutMs?: unknown;
@@ -109,6 +119,7 @@ interface RawCase {
   promptFile?: unknown;
   grader?: unknown;
   images?: unknown;
+  render?: unknown;
   runs?: unknown;
   seed?: unknown;
   addDirs?: unknown;
@@ -156,6 +167,7 @@ export function loadCompareConfig(path: string, overrides: CompareOverrides = {}
     },
     requestParams: raw.requestParams === undefined ? undefined : recordOf(raw.requestParams, "requestParams"),
     retries: raw.retries === undefined ? undefined : numberValue(raw.retries, 0),
+    renderVars: renderValue(raw.render, baseDir, "render"),
     runs: overrides.runs ?? numberValue(raw.runs, 5),
     timeoutMs: overrides.timeoutMs ?? numberValue(raw.timeoutMs, 600_000),
     maxBudgetUsd: overrides.maxBudgetUsd ?? numberValue(raw.maxBudgetUsd, 1),
@@ -183,6 +195,7 @@ function normalizeCase(baseDir: string, raw: RawCase, index: number): EvalCaseCo
     prompt,
     grader: graderValue(raw.grader, name),
     images: stringArray(raw.images, `${name}.images`).map((image) => resolveFrom(baseDir, image)),
+    renderVars: renderValue(raw.render, baseDir, `${name}.render`),
     runs: optionalNumber(raw.runs, `${name}.runs`),
     seed: optionalPath(baseDir, stringValue(raw.seed, undefined)),
     addDirs: stringArray(raw.addDirs, `${name}.addDirs`).map((dir) => resolveFrom(baseDir, dir)),
@@ -222,7 +235,16 @@ function validateCompareConfig(config: CompareConfig): void {
     if (config.tools === "" || config.cases.some((evalCase) => evalCase.tools === "")) {
       throw new Error('delivery "install" needs tools enabled: skills are invoked via the Skill tool, so tools "" can never trigger them');
     }
+    if (config.renderVars !== undefined || config.cases.some((evalCase) => evalCase.renderVars !== undefined)) {
+      throw new Error('render applies to inlined prompt text; delivery "install" copies skill files verbatim, so placeholders cannot be bound');
+    }
   }
+}
+
+function renderValue(value: unknown, baseDir: string, label: string): RenderVars | undefined {
+  if (value === undefined) return undefined;
+  const record = recordOf(value, label);
+  return resolveRenderVars(recordOf(record.vars ?? {}, `${label}.vars`), baseDir, `${label}.vars`);
 }
 
 function normalizeSkills(value: unknown, label: string, sharedSkills: string[] | undefined): string[] {

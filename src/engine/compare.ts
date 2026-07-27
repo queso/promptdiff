@@ -1,6 +1,7 @@
 import { assembleSystemPrompt } from "../prompt";
 import type { Runner, RunnerRunOptions, RunResult } from "../types";
 import type { ArmConfig, CompareConfig, EvalCaseConfig, ScenarioKind } from "./config";
+import { renderStrict, type RenderVars } from "./render";
 import { gradeRun, type GradeResult } from "./grader";
 import { prepareSandbox } from "./sandbox";
 import { installSkills } from "./skill-install";
@@ -58,12 +59,15 @@ export async function runCompare(options: CompareRunOptions): Promise<CompareSum
   const inline = config.delivery !== "install";
   const baselinePrompt = assembleSystemPrompt(config.agent, inline ? config.baselineSkills : []);
   const proposedPrompt = assembleSystemPrompt(config.agent, inline ? config.proposedSkills : []);
+  // Rendering all cases up front means an unbound placeholder in scenario 3
+  // fails here — before scenario 1 spends anything.
+  const renderedCases = config.cases.map((evalCase) => renderCase(evalCase, baselinePrompt, proposedPrompt, config));
   const cases: CaseSummary[] = [];
 
-  for (const evalCase of config.cases) {
+  for (const { evalCase, baselineSystem, proposedSystem } of renderedCases) {
     onProgress?.(`scenario ${evalCase.name} (${evalCase.kind})`);
-    const baseline = await runArm(config, evalCase, "baseline", baselinePrompt, runners.baseline, onProgress);
-    const proposed = await runArm(config, evalCase, "proposed", proposedPrompt, runners.proposed, onProgress);
+    const baseline = await runArm(config, evalCase, "baseline", baselineSystem, runners.baseline, onProgress);
+    const proposed = await runArm(config, evalCase, "proposed", proposedSystem, runners.proposed, onProgress);
     cases.push({
       name: evalCase.name,
       kind: evalCase.kind,
@@ -165,6 +169,36 @@ export function validateRunnerSupport(config: CompareConfig, runner: Runner): vo
       );
     }
   }
+}
+
+interface RenderedCase {
+  evalCase: EvalCaseConfig;
+  baselineSystem: string;
+  proposedSystem: string;
+}
+
+/** Applies merged render vars (scenario over top-level) to both arms' system prompts and the scenario prompt. */
+function renderCase(
+  evalCase: EvalCaseConfig,
+  baselinePrompt: string,
+  proposedPrompt: string,
+  config: CompareConfig,
+): RenderedCase {
+  const vars = mergedRenderVars(config, evalCase);
+  if (vars === undefined) {
+    return { evalCase, baselineSystem: baselinePrompt, proposedSystem: proposedPrompt };
+  }
+  return {
+    evalCase: { ...evalCase, prompt: renderStrict(evalCase.prompt, vars, `scenario "${evalCase.name}" prompt`) },
+    baselineSystem: renderStrict(baselinePrompt, vars, `scenario "${evalCase.name}" baseline system prompt`),
+    proposedSystem: renderStrict(proposedPrompt, vars, `scenario "${evalCase.name}" proposed system prompt`),
+  };
+}
+
+/** Undefined when neither level defines render — rendering (and its strictness) is opt-in. */
+function mergedRenderVars(config: CompareConfig, evalCase: EvalCaseConfig): RenderVars | undefined {
+  if (config.renderVars === undefined && evalCase.renderVars === undefined) return undefined;
+  return { ...config.renderVars, ...evalCase.renderVars };
 }
 
 async function runArm(

@@ -287,6 +287,50 @@ Each arm is validated against its own runner's capabilities before any paid
 run, so an openai arm still rejects command graders, tools, artifact mode,
 and install delivery up front.
 
+## Testing templated prompts
+
+Production prompts often contain template placeholders (`{{draft}}`,
+`{{voice}}`) that a pipeline fills in at runtime. `render` lets a scenario
+point at the real prompt file and supply the bindings, so the eval tests what
+ships — not a hand-copied "rendered variant" that drifts:
+
+```json
+{
+  "agent": "./agents/editor.md",
+  "baselineSkills": ["../flows/post/prompts/editorial.md"],
+  "proposedSkills": ["./editorial.tightened.md"],
+  "model": "sonnet",
+  "render": { "vars": { "voice": "../voice/personal.md" } },
+  "scenarios": [
+    {
+      "name": "catches-scope-overstatement",
+      "kind": "target",
+      "prompt": "Apply the editorial gate.",
+      "render": { "vars": { "draft": "./fixtures/draft-scope-overstatement.md" } },
+      "grader": { "type": "text", "regex": ["REJECT"] }
+    }
+  ]
+}
+```
+
+- Var values resolve as paths relative to the scenario file: a value naming
+  an existing file is read as its contents; anything else is used literally.
+  Files are read at load time, so a missing fixture fails before any paid run.
+- Bindings apply to the agent body, inlined skill text, and scenario prompts.
+  A scenario's `render` merges over the top-level one (scenario wins per var)
+  — bind shared vars once, vary the fixture per scenario.
+- Rendering is strict: when any `render` block is present, unbound
+  `{{placeholders}}` abort before any paid run, so `{{draft}}` never silently
+  reaches a model. Without a `render` block, braces pass through untouched,
+  as before.
+- Inline delivery only — install delivery copies skill files verbatim, so
+  placeholders can't be bound there.
+- `run` gets the same behavior via `--var name=value` (repeatable), handy
+  while developing fixtures.
+
+Placeholder syntax is `{{name}}`, with inner whitespace tolerated
+(`{{ draft }}`).
+
 Two caveats when the arms use different runners: claude-p arms are agentic
 (tools, multiple turns) while openai arms are single completions, so pass
 rates compare but the mechanics differ; and the openai runner reports $0 cost
