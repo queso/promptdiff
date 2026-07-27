@@ -71,6 +71,13 @@ For artifact-producing runs, use `--mode artifact`; by default that enables
 the agent's default tools and keeps the sandbox for inspection. Pass
 `--clean-sandbox` to delete it after a single run.
 
+**Budget sizing:** the default `$1` cap is tuned for text-mode runs. An
+artifact-mode run with default tools on even a small fixture can measure
+`~$0.86` — right at the cap — and the cap is only checked between turns, so
+runs need headroom. Set `maxBudgetUsd` to `3` or more for artifact scenarios.
+A run that hits the cap fails with an explicit
+`claude hit the $N max budget` error rather than a silent bad sample.
+
 ## Runners
 
 `--runner claude-p` (default) shells out to headless Claude Code and supports
