@@ -157,9 +157,12 @@ Two more top-level scenario fields tune the openai runner in `compare`:
   merged into the chat-completions request body (they can never clobber
   `model` or `messages`). Useful for pinning temperature so pass-rate deltas
   reflect the prompt, not sampling noise.
-- `"retries": 2` — extra attempts after a timeout or connection failure,
-  for flaky local endpoints. HTTP errors and malformed responses still fail
-  immediately. Default 0.
+- `"retries": 2` (the default) — extra attempts after a *transient* failure:
+  timeout, connection error, HTTP 429 or 5xx, with exponential backoff and a
+  per-attempt timeout. One `503 service overloaded` no longer throws away a
+  whole compare. Deterministic failures (other 4xx, malformed responses)
+  still fail immediately without burning retries. Set `"retries": 0` to
+  disable.
 
 ## Single Run
 
