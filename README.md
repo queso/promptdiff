@@ -157,9 +157,12 @@ Two more top-level scenario fields tune the openai runner in `compare`:
   merged into the chat-completions request body (they can never clobber
   `model` or `messages`). Useful for pinning temperature so pass-rate deltas
   reflect the prompt, not sampling noise.
-- `"retries": 2` — extra attempts after a timeout or connection failure,
-  for flaky local endpoints. HTTP errors and malformed responses still fail
-  immediately. Default 0.
+- `"retries": 2` (the default) — extra attempts after a *transient* failure:
+  timeout, connection error, HTTP 429 or 5xx, with exponential backoff and a
+  per-attempt timeout. One `503 service overloaded` no longer throws away a
+  whole compare. Deterministic failures (other 4xx, malformed responses)
+  still fail immediately without burning retries. Set `"retries": 0` to
+  disable.
 
 ## Single Run
 
@@ -251,6 +254,29 @@ Useful overrides:
 `compare` exits non-zero when assertions fail. For target scenarios, baseline
 must not fully pass and proposed must improve the pass rate. For regression
 scenarios, proposed must not fall below baseline.
+
+Reading results:
+
+- Failing runs print their grader message plus the tail of grader
+  stdout/stderr directly in the summary, so one compare run tells you *which*
+  check missed without a `--keep-sandbox` re-run.
+- Deltas that sampling noise could explain are labelled
+  (`NOTE: delta could be sampling noise (Fisher exact p=0.47)`). Assertions
+  and exit codes are unchanged — the label keeps a 1/3 → 2/3 "win" from
+  reading like a receipt. At n=3 per arm, even 0/3 → 3/3 only reaches p=0.10;
+  use more runs when the claim matters.
+- Declare `"productionModel": "gpt-5.5"` and any arm testing a different
+  model gets a warning on the summary — a pass on the wrong model validates
+  prompt logic, not production behavior.
+
+### Run history
+
+`--report ndjson --report-out ./runs.ndjson` appends one record per scenario
+per invocation: timestamp, arms (model, runner, passes, cost), delta,
+sampling p, failed assertions, sha256 hashes of each arm's rendered system
+prompt, and `productionModel`. Append-only NDJSON — diffable, greppable, and
+queryable months later ("has the catch rate drifted since July?") without
+hand-transcribing summaries. Failed comparisons are recorded too.
 
 ## Comparing models
 
@@ -425,6 +451,25 @@ scenario so no tools are demanded, and script against the file:
   }
 }
 ```
+
+## Designing good fixtures
+
+Lessons from production compare runs, for scenario authors:
+
+- **Don't seed the answer key.** If the primary sources live inside the
+  sandbox, any thorough agent can "verify" claims by adjacency and both arms
+  pass for the wrong reason. Cite out-of-sandbox paths or URLs so
+  re-derivation is the discriminating behavior.
+- **Planted defects must be unambiguous.** A one-word quote diff grades as
+  pedantry; a clear paraphrase grades cleanly. The answer key belongs in the
+  grader — never in the fixture itself.
+- **Set the pass bar where the policy value is.** Mechanical holes (wrong
+  dates, dead links) fall to any tools-capable agent; the bar has to require
+  the defect classes only the prompt-under-test knows about, or the eval
+  can't tell your prompt from no prompt.
+- **Prove the gap exists before trusting the fix.** That's what target
+  scenarios' "baseline must not fully pass" assertion is for — a fixture the
+  baseline aces can't certify an improvement.
 
 ## Security note
 

@@ -49,6 +49,8 @@ export interface CompareConfig {
    * unbound placeholders fail before any paid run.
    */
   renderVars?: RenderVars;
+  /** Model that runs this prompt in production; arms testing a different model get flagged. */
+  productionModel?: string;
   runs: number;
   timeoutMs: number;
   maxBudgetUsd: number;
@@ -99,6 +101,7 @@ interface RawCompareConfig {
   retries?: unknown;
   render?: unknown;
   model?: unknown;
+  productionModel?: unknown;
   runs?: unknown;
   timeoutMs?: unknown;
   maxBudgetUsd?: unknown;
@@ -168,6 +171,7 @@ export function loadCompareConfig(path: string, overrides: CompareOverrides = {}
     requestParams: raw.requestParams === undefined ? undefined : recordOf(raw.requestParams, "requestParams"),
     retries: raw.retries === undefined ? undefined : numberValue(raw.retries, 0),
     renderVars: renderValue(raw.render, baseDir, "render"),
+    productionModel: stringValue(raw.productionModel, undefined),
     runs: overrides.runs ?? numberValue(raw.runs, 5),
     timeoutMs: overrides.timeoutMs ?? numberValue(raw.timeoutMs, 600_000),
     maxBudgetUsd: overrides.maxBudgetUsd ?? numberValue(raw.maxBudgetUsd, 1),

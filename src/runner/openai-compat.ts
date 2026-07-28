@@ -7,10 +7,15 @@ export interface OpenAiCompatRunnerConfig {
   baseUrl?: string;
   /** Defaults to $OPENAI_API_KEY. Optional — local servers often need none. */
   apiKey?: string;
-  /** Extra attempts after a per-request timeout (flaky local endpoints). Default 0. */
+  /** Extra attempts after a transient failure (timeout, connect error, 429/5xx). Default 2. */
   retries?: number;
+  /** Backoff before retry attempt N (1-based); injectable for tests. */
+  backoffMs?: (attempt: number) => number;
   fetchFn?: typeof fetch;
 }
+
+/** Failure modes worth retrying: the request produced nothing durable and the cause is time-bound. */
+class TransientError extends Error {}
 
 export type ChatContentPart =
   | { type: "text"; text: string }
@@ -83,26 +88,30 @@ export class OpenAiCompatRunner implements Runner {
   private readonly baseUrl: string;
   private readonly apiKey: string | undefined;
   private readonly retries: number;
+  private readonly backoffMs: (attempt: number) => number;
   private readonly fetchFn: typeof fetch;
 
   constructor(config: OpenAiCompatRunnerConfig = {}) {
     this.baseUrl = (config.baseUrl ?? process.env.OPENAI_BASE_URL ?? "https://api.openai.com/v1").replace(/\/+$/, "");
     this.apiKey = config.apiKey ?? process.env.OPENAI_API_KEY;
-    this.retries = config.retries ?? 0;
+    this.retries = config.retries ?? 2;
+    this.backoffMs = config.backoffMs ?? ((attempt) => Math.min(4_000, 500 * 2 ** (attempt - 1)));
     this.fetchFn = config.fetchFn ?? fetch;
   }
 
   async run(options: RunnerRunOptions): Promise<RunResult> {
-    // Only timeouts are retried — they produced nothing and are the transient
-    // failure mode of flaky local endpoints. HTTP errors and bad JSON still throw.
+    // Transient failures (timeout, connect error, 429/5xx) retry with backoff —
+    // one 503 at run 4-of-5 must not throw away a whole paid compare. Anything
+    // deterministic (4xx, bad JSON, malformed completion) still throws at once.
     let lastError: Error | undefined;
     for (let attempt = 0; attempt <= this.retries; attempt += 1) {
+      if (attempt > 0) {
+        await Bun.sleep(this.backoffMs(attempt));
+      }
       try {
         return await this.runOnce(options);
       } catch (error) {
-        // Timeouts and connect-level failures are the transient modes of flaky
-        // local endpoints; HTTP errors and bad JSON still throw immediately.
-        if (!(error instanceof Error) || !/timed out after|request to .* failed/.test(error.message)) throw error;
+        if (!(error instanceof TransientError)) throw error;
         lastError = error;
       }
     }
@@ -127,15 +136,20 @@ export class OpenAiCompatRunner implements Runner {
       });
     } catch (error) {
       if (error instanceof DOMException && error.name === "TimeoutError") {
-        throw new Error(`${url} timed out after ${options.timeoutMs}ms`);
+        throw new TransientError(`${url} timed out after ${options.timeoutMs}ms`);
       }
       const reason = error instanceof Error ? error.message : String(error);
-      throw new Error(`request to ${url} failed: ${reason}`);
+      throw new TransientError(`request to ${url} failed: ${reason}`);
     }
 
     const body = await response.text();
     if (!response.ok) {
-      throw new Error(`${url} returned ${response.status}: ${body.slice(0, 1_500)}`);
+      const message = `${url} returned ${response.status}: ${body.slice(0, 1_500)}`;
+      // 429/5xx are load conditions; other statuses are wrong requests.
+      if (response.status === 429 || response.status >= 500) {
+        throw new TransientError(message);
+      }
+      throw new Error(message);
     }
 
     let parsed: ChatCompletion;

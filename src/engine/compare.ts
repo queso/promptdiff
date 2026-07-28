@@ -1,7 +1,9 @@
+import { createHash } from "node:crypto";
 import { assembleSystemPrompt } from "../prompt";
 import type { Runner, RunnerRunOptions, RunResult } from "../types";
 import type { ArmConfig, CompareConfig, EvalCaseConfig, ScenarioKind } from "./config";
 import { renderStrict, type RenderVars } from "./render";
+import { fisherExactTwoTailedP } from "./stats";
 import { gradeRun, type GradeResult } from "./grader";
 import { prepareSandbox } from "./sandbox";
 import { installSkills } from "./skill-install";
@@ -32,11 +34,16 @@ export interface CaseSummary {
   baseline: ArmSummary;
   proposed: ArmSummary;
   assertions: string[];
+  /** Two-tailed Fisher exact p for the pass/fail table — how easily noise explains the delta. */
+  samplingP?: number;
+  /** Hashes of each arm's rendered system prompt — pins a result to exact prompt content. */
+  promptSha256?: { baseline: string; proposed: string };
 }
 
 export interface CompareSummary {
   name: string;
   arms: { baseline: ArmConfig; proposed: ArmConfig };
+  productionModel?: string;
   cases: CaseSummary[];
   failedAssertions: string[];
   totalCostUsd: number;
@@ -74,6 +81,8 @@ export async function runCompare(options: CompareRunOptions): Promise<CompareSum
       baseline,
       proposed,
       assertions: evaluateAssertions(evalCase, baseline, proposed),
+      samplingP: fisherExactTwoTailedP(baseline.passes, baseline.totalRuns, proposed.passes, proposed.totalRuns),
+      promptSha256: { baseline: sha256(baselineSystem), proposed: sha256(proposedSystem) },
     });
   }
 
@@ -88,6 +97,7 @@ export async function runCompare(options: CompareRunOptions): Promise<CompareSum
   return {
     name: config.name,
     arms: config.arms,
+    productionModel: config.productionModel,
     cases,
     failedAssertions,
     totalCostUsd,
@@ -119,11 +129,43 @@ export function formatCompareSummary(summary: CompareSummary): string {
     } else {
       lines.push("  PASS: assertions satisfied");
     }
+
+    // A pass-rate delta that noise explains must not read like a receipt:
+    // 1/3 → 2/3 passes the target assertion but is close to a coin flip.
+    if (
+      caseSummary.samplingP !== undefined &&
+      caseSummary.baseline.passes !== caseSummary.proposed.passes &&
+      caseSummary.samplingP > 0.05
+    ) {
+      lines.push(
+        `  NOTE: delta could be sampling noise (Fisher exact p=${caseSummary.samplingP.toFixed(2)}) — consider more runs`,
+      );
+    }
+
+    // Failing runs carry their grader evidence into the summary — diagnosing
+    // WHICH check missed used to require re-running with --keep-sandbox.
+    for (const arm of [caseSummary.baseline, caseSummary.proposed]) {
+      for (const run of arm.runs) {
+        if (run.pass) continue;
+        lines.push(`  ${arm.name} run ${run.run} failed: ${run.grade.message}`);
+        lines.push(...graderEvidence(run.grade));
+      }
+    }
   }
 
   lines.push("", `total cost: $${summary.totalCostUsd.toFixed(4)}`);
   if ((summary.arms.baseline.runner === "openai") !== (summary.arms.proposed.runner === "openai")) {
     lines.push("note: cost columns are not comparable — the openai runner reports $0 (tokens only)");
+  }
+  // A pass on the wrong model validates prompt logic, not production behavior —
+  // that divergence must be on the receipt, not in a README caveat.
+  for (const armName of ["baseline", "proposed"] as const) {
+    const model = summary.arms[armName].model;
+    if (summary.productionModel !== undefined && model !== summary.productionModel) {
+      lines.push(
+        `warning: ${armName} tests "${model}" but production model is "${summary.productionModel}" — this validates prompt logic, not production behavior`,
+      );
+    }
   }
   if (summary.failedAssertions.length > 0) {
     lines.push("failed assertions:");
@@ -133,6 +175,30 @@ export function formatCompareSummary(summary: CompareSummary): string {
   }
 
   return lines.join("\n");
+}
+
+function sha256(text: string): string {
+  return createHash("sha256").update(text).digest("hex");
+}
+
+const EVIDENCE_TAIL_LINES = 6;
+const EVIDENCE_MAX_CHARS = 700;
+
+/** Last few lines of a failing run's grader stdout/stderr, indented for the summary. */
+function graderEvidence(grade: GradeResult): string[] {
+  const streams: Array<[string, string | undefined]> = [
+    ["stdout", grade.stdout],
+    ["stderr", grade.stderr],
+  ];
+  const lines: string[] = [];
+  for (const [stream, content] of streams) {
+    const trimmed = content?.trim();
+    if (!trimmed) continue;
+    const tail = trimmed.split("\n").slice(-EVIDENCE_TAIL_LINES).join("\n").slice(-EVIDENCE_MAX_CHARS);
+    lines.push(`    grader ${stream}:`);
+    lines.push(...tail.split("\n").map((line) => `      ${line}`));
+  }
+  return lines;
 }
 
 /** Bare arm name when the arms match; annotated with model (and runner when runners differ) otherwise. */

@@ -160,12 +160,44 @@ test("OpenAiCompatRunner retries timeouts up to `retries` extra attempts", async
     return new Response(completion("recovered"));
   }) as unknown as typeof fetch;
 
-  const runner = new OpenAiCompatRunner({ baseUrl: "http://x/v1", retries: 2, fetchFn });
+  const runner = new OpenAiCompatRunner({ baseUrl: "http://x/v1", retries: 2, backoffMs: () => 0, fetchFn });
   const result = await runner.run(baseOptions);
   expect(result.output).toBe("recovered");
   expect(attempts).toBe(3);
 
   attempts = 0;
-  const noRetry = new OpenAiCompatRunner({ baseUrl: "http://x/v1", retries: 0, fetchFn });
+  const noRetry = new OpenAiCompatRunner({ baseUrl: "http://x/v1", retries: 0, backoffMs: () => 0, fetchFn });
   await expect(noRetry.run(baseOptions)).rejects.toThrow(/after 1 attempts/);
+});
+
+test("OpenAiCompatRunner retries 429/5xx but fails 4xx immediately", async () => {
+  let attempts = 0;
+  const flaky = (async () => {
+    attempts += 1;
+    return attempts < 3
+      ? new Response("service overloaded", { status: attempts === 1 ? 503 : 429 })
+      : new Response(completion("recovered"));
+  }) as unknown as typeof fetch;
+
+  // Default retries (2) ride out a 503 then a 429 — the exact class that was
+  // killing whole compares against Fireworks.
+  const runner = new OpenAiCompatRunner({ baseUrl: "http://x/v1", backoffMs: () => 0, fetchFn: flaky });
+  const result = await runner.run(baseOptions);
+  expect(result.output).toBe("recovered");
+  expect(attempts).toBe(3);
+
+  // Deterministic failures must not burn retries: one attempt, immediate error.
+  let badRequests = 0;
+  const badRequest = (async () => {
+    badRequests += 1;
+    return new Response("bad request", { status: 400 });
+  }) as unknown as typeof fetch;
+  const strict = new OpenAiCompatRunner({ baseUrl: "http://x/v1", backoffMs: () => 0, fetchFn: badRequest });
+  await expect(strict.run(baseOptions)).rejects.toThrow(/returned 400/);
+  expect(badRequests).toBe(1);
+
+  // Exhausted retries report the attempt count.
+  const alwaysDown = (async () => new Response("nope", { status: 503 })) as unknown as typeof fetch;
+  const exhausted = new OpenAiCompatRunner({ baseUrl: "http://x/v1", retries: 1, backoffMs: () => 0, fetchFn: alwaysDown });
+  await expect(exhausted.run(baseOptions)).rejects.toThrow(/returned 503.*after 2 attempts/);
 });
