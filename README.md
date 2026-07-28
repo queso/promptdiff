@@ -312,6 +312,29 @@ Edit the prompt and the hash changes, the receipt goes stale, and the check
 names exactly which scenario to re-run. No version bump to remember, no way
 to ship a prompt whose eval never ran.
 
+### Caching the baseline arm
+
+A baseline arm is usually frozen by construction — it reproduces a known
+failure and never changes — yet every compare re-runs it, so about half of
+each iteration's cost re-proves something already recorded. `--cache` reuses
+recorded baseline results instead:
+
+```bash
+./promptdiff compare --scenario ./scenarios/wi-203.json --cache
+```
+
+Results land in `.promptdiff/cache` (override with `--cache-dir <dir>`; it
+requires `--cache`). Caching is opt-in because a cache that is silently on is
+a cache that is silently stale. The key hashes content, not paths, so a hit
+means nothing outcome-relevant changed: the rendered baseline system prompt
+(agent + skill text + render vars), the scenario prompt, the baseline
+model/runner, the run count, tools/mode/delivery, the grader spec, image file
+contents, and the sandbox seed tree. Change any of those and the next compare
+runs the baseline fresh. The proposed arm — the thing being iterated — always
+runs fresh, and cached baselines are real graded results, so assertions,
+sampling-p notes, and reports work unchanged; the summary marks the baseline
+line with `(cached)`. Delete the cache dir to bust it.
+
 ## Measure: characterize before you change
 
 `compare` answers "did the change help?" — `measure` answers the question

@@ -65,6 +65,8 @@ const compareSpecs: FlagSpecs = {
   report: { arity: "one" },
   "report-out": { arity: "one" },
   receipts: { arity: "one" },
+  cache: { arity: "none" },
+  "cache-dir": { arity: "one" },
 };
 
 export async function main(argv: string[]): Promise<number> {
@@ -279,6 +281,11 @@ async function cmdCompare(argv: string[]): Promise<number> {
   if (reportOut && report === undefined) {
     throw new CliError("--report-out requires --report ndjson");
   }
+  // Caching is opt-in: a bare --cache-dir must not silently enable it.
+  if (args.one("cache-dir") !== undefined && !args.has("cache")) {
+    throw new CliError("--cache-dir requires --cache");
+  }
+  const cache = args.has("cache") ? { dir: args.one("cache-dir") ?? ".promptdiff/cache" } : undefined;
 
   const overrides: CompareOverrides = {
     agent: args.one("agent"),
@@ -311,6 +318,7 @@ async function cmdCompare(argv: string[]): Promise<number> {
       proposed: armRunner(config.arms.proposed, config),
     },
     onProgress: (message) => console.error(`[promptdiff] ${message}`),
+    cache,
   });
 
   // History is appended before the exit code is decided — failed comparisons
@@ -468,6 +476,13 @@ function compareUsage(): string {
     "           --mode <text|artifact> --tools <tools|default|''>",
     "           --timeout-ms <ms> --max-budget-usd <usd>",
     "           --report ndjson --report-out <file>",
+    "           --cache [--cache-dir <dir>]",
+    "",
+    "caching:",
+    "  --cache reuses recorded baseline-arm results (default dir .promptdiff/cache)",
+    "  when nothing that could change the outcome changed: rendered prompts, skill",
+    "  and fixture contents, model/runner, run count, tools/mode/delivery, grader.",
+    "  Opt-in only; the proposed arm always runs fresh. Delete the dir to bust.",
     "",
     "report:",
     "  --report ndjson appends one record per scenario to --report-out: arms,",
