@@ -461,6 +461,44 @@ Text grader:
 }
 ```
 
+JSON grader:
+
+```json
+{
+  "type": "json",
+  "assert": [
+    "findings.items.length >= 1",
+    "findings.items[*].domain contains \"correctness\""
+  ]
+}
+```
+
+The json grader parses the run's output as JSON and checks each `assert`
+entry; all must hold. Reasoning models wrap their answer in prose, so if the
+whole output is not valid JSON, the grader takes the **last balanced JSON
+value** (`{...}` or `[...]`) in the output — braces inside string literals
+are handled correctly. No JSON value at all fails the grade with
+`no JSON value found in output`.
+
+Each assertion is `<path> <op> <literal>` (spaces around the operator):
+
+- **path** — dot-separated keys with `[<index>]` and `[*]` steps:
+  `verdict`, `findings.items.length`, `findings.items[0].severity`,
+  `findings.items[*].domain`. A trailing `.length` on an array or string
+  reads its length.
+- **op** — `==`, `!=`, `>`, `>=`, `<`, `<=`, `contains` (substring on a
+  string, membership on an array).
+- **literal** — a JSON scalar: `"correctness"`, `0`, `true`, `null`.
+
+`[*]` is existential: the assertion passes if **any** element satisfies it —
+including `!=`, where `items[*].x != 1` means "some element differs". For
+"no element equals", assert on a value that must not appear another way
+(e.g. combine with a `length` bound or use a `[<index>]` path). Missing
+paths and type mismatches fail the assertion (with a message naming the
+problem), never the whole run. Bad assertion grammar fails at config load,
+before any paid run. Like text graders, json graders inspect only the final
+output, so they work with every runner, including openai.
+
 Command grader:
 
 ```json

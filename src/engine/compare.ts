@@ -480,6 +480,8 @@ function evaluateAssertions(
 }
 
 function inferMode(evalCase: EvalCaseConfig): "text" | "artifact" {
+  // text and json graders inspect the run's output only, so they demand no
+  // sandbox tools and stay valid on text-only runners (openai).
   return evalCase.grader.type === "command" ? "artifact" : "text";
 }
 
