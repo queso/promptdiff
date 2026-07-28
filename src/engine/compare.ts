@@ -237,6 +237,91 @@ export function validateRunnerSupport(config: CompareConfig, runner: Runner): vo
   }
 }
 
+export interface MeasureCaseSummary {
+  name: string;
+  kind: ScenarioKind;
+  result: ArmSummary;
+  /** Hash of the rendered system prompt this case measured. */
+  promptSha256: string;
+}
+
+export interface MeasureSummary {
+  name: string;
+  arm: ArmConfig;
+  productionModel?: string;
+  cases: MeasureCaseSummary[];
+  totalCostUsd: number;
+}
+
+export interface MeasureRunOptions {
+  config: CompareConfig;
+  runner: Runner;
+  onProgress?: (message: string) => void;
+}
+
+/**
+ * Characterizes ONE instruction set: per-case pass rates, no delta and no
+ * assertions. The "know the current survival rate before you change anything"
+ * half of prompt testing — faking it with identical compare arms produces
+ * nonsense verdicts from sampling noise.
+ */
+export async function runMeasure(options: MeasureRunOptions): Promise<MeasureSummary> {
+  const { config, runner, onProgress } = options;
+  validateRunnerSupport(config, runner);
+  const inline = config.delivery !== "install";
+  const basePrompt = assembleSystemPrompt(config.agent, inline ? config.baselineSkills : []);
+  // Same fail-before-any-paid-run guarantee as compare: render everything first.
+  const rendered = config.cases.map((evalCase) => {
+    const vars = mergedRenderVars(config, evalCase);
+    if (vars === undefined) return { evalCase, systemPrompt: basePrompt };
+    return {
+      evalCase: { ...evalCase, prompt: renderStrict(evalCase.prompt, vars, `scenario "${evalCase.name}" prompt`) },
+      systemPrompt: renderStrict(basePrompt, vars, `scenario "${evalCase.name}" system prompt`),
+    };
+  });
+
+  const cases: MeasureCaseSummary[] = [];
+  for (const { evalCase, systemPrompt } of rendered) {
+    onProgress?.(`scenario ${evalCase.name}`);
+    const result = await runArm(config, evalCase, "baseline", systemPrompt, runner, onProgress, "measure");
+    cases.push({ name: evalCase.name, kind: evalCase.kind, result, promptSha256: sha256(systemPrompt) });
+  }
+
+  return {
+    name: config.name,
+    arm: config.arms.baseline,
+    productionModel: config.productionModel,
+    cases,
+    totalCostUsd: cases.reduce((sum, caseSummary) => sum + caseSummary.result.totalCostUsd, 0),
+  };
+}
+
+export function formatMeasureSummary(summary: MeasureSummary): string {
+  const lines = [`promptdiff measure: ${summary.name} (${summary.arm.model} via ${summary.arm.runner})`];
+
+  for (const caseSummary of summary.cases) {
+    const result = caseSummary.result;
+    lines.push(
+      "",
+      caseSummary.name,
+      `  ${result.passes}/${result.totalRuns} pass (${formatPct(result.passRate)}) | $${result.totalCostUsd.toFixed(4)}`,
+    );
+    for (const run of result.runs) {
+      if (run.pass) continue;
+      lines.push(`  run ${run.run} failed: ${run.grade.message}`);
+      lines.push(...graderEvidence(run.grade));
+    }
+  }
+
+  lines.push("", `total cost: $${summary.totalCostUsd.toFixed(4)}`);
+  if (summary.productionModel !== undefined && summary.arm.model !== summary.productionModel) {
+    lines.push(
+      `warning: measured "${summary.arm.model}" but production model is "${summary.productionModel}" — this characterizes prompt logic, not production behavior`,
+    );
+  }
+  return lines.join("\n");
+}
+
 interface RenderedCase {
   evalCase: EvalCaseConfig;
   baselineSystem: string;
@@ -274,6 +359,7 @@ async function runArm(
   systemPrompt: string,
   runner: Runner,
   onProgress?: (message: string) => void,
+  label: string = arm,
 ): Promise<ArmSummary> {
   const runs = evalCase.runs ?? config.runs;
   const summaries: ArmRunSummary[] = [];
@@ -283,16 +369,16 @@ async function runArm(
     const sandbox = prepareSandbox({
       root: config.sandboxRoot,
       seed: evalCase.seed ?? config.sandboxSeed,
-      prefix: `${evalCase.name}-${arm}-${index + 1}`,
+      prefix: `${evalCase.name}-${label}-${index + 1}`,
       keep: config.keepSandbox,
     });
 
     try {
-      onProgress?.(`  ${arm} run ${index + 1}/${runs}`);
+      onProgress?.(`  ${label} run ${index + 1}/${runs}`);
       if (config.delivery === "install") {
         const { installed, warnings } = installSkills(armSkills, sandbox.dir);
         if (index === 0) {
-          onProgress?.(`  ${arm} installed skills: ${installed.map((skill) => skill.name).join(", ")}`);
+          onProgress?.(`  ${label} installed skills: ${installed.map((skill) => skill.name).join(", ")}`);
           for (const warning of warnings) {
             onProgress?.(`  WARNING: ${warning}`);
           }

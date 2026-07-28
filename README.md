@@ -286,6 +286,41 @@ prompt, and `productionModel`. Append-only NDJSON — diffable, greppable, and
 queryable months later ("has the catch rate drifted since July?") without
 hand-transcribing summaries. Failed comparisons are recorded too.
 
+## Measure: characterize before you change
+
+`compare` answers "did the change help?" — `measure` answers the question
+that comes first: *what does the current prompt actually do?* One arm,
+per-case pass rates, no delta and no assertions:
+
+```bash
+./promptdiff measure --scenario ./scenarios/survival.json
+```
+
+```json
+{
+  "name": "finding survival",
+  "agent": "./agents/reviewer.md",
+  "skills": ["../flows/review/prompts/coordinate.md"],
+  "model": "sonnet",
+  "runs": 16,
+  "scenarios": [
+    {
+      "name": "true-finding-survives",
+      "prompt": "Review this diff.",
+      "grader": { "type": "text", "contains": ["unbounded-network-call"] }
+    }
+  ]
+}
+```
+
+The scenario file is the compare format — render vars, images, pricing,
+`productionModel`, and both grader types all apply — but only `skills` (or
+`baselineSkills`) is required; no proposed arm. Don't fake this with
+identical compare arms: two identical arms at small n routinely produce
+verdicts like `FAIL: proposed regressed below baseline` out of pure sampling
+noise. `measure` exits 0 whenever the runs complete — a measurement has no
+pass/fail.
+
 ## Comparing models
 
 The A/B variable does not have to be the skill text. Hold the prompt and

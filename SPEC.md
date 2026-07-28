@@ -184,6 +184,14 @@ history.
 rates and the delta, for comparisons (typically model-vs-model) where neither
 direction is claimed in advance.
 
+**Measure mode.** `promptdiff measure` runs a single instruction set through
+the same scenario machinery and reports per-case pass rates with no delta
+and no assertions — the "characterize before you change" half of prompt
+testing. It loads the compare format with a single-arm allowance (`skills`
+or `baselineSkills` alone suffices) and always exits 0 on completion.
+Identical-arm compares are not a substitute: at small n they emit
+directional verdicts from pure sampling noise.
+
 **Template rendering.** `render.vars` — top-level and/or per scenario, with
 the scenario winning per var — binds `{{name}}` placeholders across the agent
 body, inlined skill text, and scenario prompts. This is what lets scenarios

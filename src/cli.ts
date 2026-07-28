@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { CliError, parseArgs, type FlagSpecs } from "./args";
 import { loadCompareConfig, type ArmConfig, type CompareConfig, type CompareOverrides } from "./engine/config";
-import { formatCompareSummary, runCompare } from "./engine/compare";
+import { formatCompareSummary, formatMeasureSummary, runCompare, runMeasure } from "./engine/compare";
 import { prepareSandbox } from "./engine/sandbox";
 import { installSkills, type Delivery } from "./engine/skill-install";
 import { renderStrict, resolveRenderVars, type RenderVars } from "./engine/render";
@@ -88,6 +88,13 @@ export async function main(argv: string[]): Promise<number> {
           return 0;
         }
         return await cmdCompare(rest);
+      case "measure":
+        if (isHelp(rest)) {
+          console.log(measureUsage());
+          return 0;
+        }
+        await cmdMeasure(rest);
+        return 0;
       default:
         throw new CliError(generalUsage());
     }
@@ -188,6 +195,61 @@ async function cmdRun(argv: string[]): Promise<void> {
   } finally {
     sandbox.cleanup();
   }
+}
+
+const measureSpecs: FlagSpecs = {
+  scenario: { arity: "one" },
+  agent: { arity: "one" },
+  skill: { arity: "one", repeat: true },
+  model: { arity: "one" },
+  runner: { arity: "one" },
+  "base-url": { arity: "one" },
+  runs: { arity: "one" },
+  mode: { arity: "one" },
+  sandbox: { arity: "one" },
+  seed: { arity: "one" },
+  "add-dir": { arity: "one", repeat: true },
+  tools: { arity: "one" },
+  "timeout-ms": { arity: "one" },
+  "max-budget-usd": { arity: "one" },
+  "keep-sandbox": { arity: "none" },
+};
+
+async function cmdMeasure(argv: string[]): Promise<void> {
+  const args = parseArgs(argv, measureSpecs);
+  const scenario = args.one("scenario");
+  if (!scenario) {
+    throw new CliError(measureUsage());
+  }
+
+  const skills = args.many("skill");
+  const overrides: CompareOverrides = {
+    agent: args.one("agent"),
+    baselineSkills: skills.length > 0 ? skills : undefined,
+    // measure exercises the baseline arm only; mirroring keeps validation happy.
+    proposedSkills: skills.length > 0 ? skills : undefined,
+    model: args.one("model"),
+    runner: args.one("runner") ? runnerNameFromString(args.one("runner")) : undefined,
+    baseUrl: args.one("base-url"),
+    runs: args.has("runs") ? args.number("runs", 0) : undefined,
+    timeoutMs: args.has("timeout-ms") ? args.number("timeout-ms", DEFAULT_TIMEOUT_MS) : undefined,
+    maxBudgetUsd: args.has("max-budget-usd") ? args.number("max-budget-usd", DEFAULT_MAX_BUDGET_USD) : undefined,
+    mode: args.one("mode") ? modeFromString(args.one("mode")) : undefined,
+    tools: args.one("tools"),
+    addDirs: args.many("add-dir").length ? args.many("add-dir") : undefined,
+    sandboxRoot: args.one("sandbox"),
+    sandboxSeed: args.one("seed"),
+    keepSandbox: args.has("keep-sandbox") ? true : undefined,
+  };
+
+  const config = loadCompareConfig(scenario, overrides, { singleArm: true });
+  const summary = await runMeasure({
+    config,
+    runner: armRunner(config.arms.baseline, config),
+    onProgress: (message) => console.error(`[promptdiff] ${message}`),
+  });
+
+  console.log(formatMeasureSummary(summary));
 }
 
 async function cmdCompare(argv: string[]): Promise<number> {
@@ -455,14 +517,39 @@ function compareUsage(): string {
   ].join("\n");
 }
 
+function measureUsage(): string {
+  return [
+    "usage: promptdiff measure --scenario <scenario.json> [overrides]",
+    "",
+    "Characterizes ONE instruction set: runs every scenario N times, grades",
+    "deterministically, and reports per-case pass rates — no delta, no",
+    "assertions. Use it to know the current survival rate before changing",
+    "anything; faking this with identical compare arms produces nonsense",
+    "verdicts from sampling noise.",
+    "",
+    "The scenario file is the compare format; measure exercises the shared",
+    "`skills` set (or `baselineSkills`) and needs no proposed arm. All compare",
+    "config applies: render vars, images, pricing, productionModel, graders.",
+    "",
+    "overrides: --agent <file.md> --skill <SKILL.md|dir>... --model <model>",
+    "           --runner <claude-p|openai> --base-url <url> --runs <n>",
+    "           --mode <text|artifact> --tools <tools|default|''>",
+    "           --sandbox <dir> --seed <dir> --keep-sandbox",
+    "           --timeout-ms <ms> --max-budget-usd <usd>",
+    "",
+    "Exit code is 0 whenever the runs complete — a measurement has no pass/fail.",
+  ].join("\n");
+}
+
 function generalUsage(): string {
   return [
-    "usage: promptdiff <run|compare> [flags]",
+    "usage: promptdiff <run|compare|measure> [flags]",
     "",
     "commands:",
     "  run      one bounded model invocation with inlined skills",
     "  compare  N-run baseline-vs-proposed scenario comparison",
+    "  measure  N-run single-arm characterization (pass rates, no assertions)",
     "",
-    "use `promptdiff run --help` or `promptdiff compare --help` for command flags",
+    "use `promptdiff <command> --help` for command flags",
   ].join("\n");
 }
