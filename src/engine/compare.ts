@@ -119,6 +119,16 @@ export function formatCompareSummary(summary: CompareSummary): string {
     } else {
       lines.push("  PASS: assertions satisfied");
     }
+
+    // Failing runs carry their grader evidence into the summary — diagnosing
+    // WHICH check missed used to require re-running with --keep-sandbox.
+    for (const arm of [caseSummary.baseline, caseSummary.proposed]) {
+      for (const run of arm.runs) {
+        if (run.pass) continue;
+        lines.push(`  ${arm.name} run ${run.run} failed: ${run.grade.message}`);
+        lines.push(...graderEvidence(run.grade));
+      }
+    }
   }
 
   lines.push("", `total cost: $${summary.totalCostUsd.toFixed(4)}`);
@@ -133,6 +143,26 @@ export function formatCompareSummary(summary: CompareSummary): string {
   }
 
   return lines.join("\n");
+}
+
+const EVIDENCE_TAIL_LINES = 6;
+const EVIDENCE_MAX_CHARS = 700;
+
+/** Last few lines of a failing run's grader stdout/stderr, indented for the summary. */
+function graderEvidence(grade: GradeResult): string[] {
+  const streams: Array<[string, string | undefined]> = [
+    ["stdout", grade.stdout],
+    ["stderr", grade.stderr],
+  ];
+  const lines: string[] = [];
+  for (const [stream, content] of streams) {
+    const trimmed = content?.trim();
+    if (!trimmed) continue;
+    const tail = trimmed.split("\n").slice(-EVIDENCE_TAIL_LINES).join("\n").slice(-EVIDENCE_MAX_CHARS);
+    lines.push(`    grader ${stream}:`);
+    lines.push(...tail.split("\n").map((line) => `      ${line}`));
+  }
+  return lines;
 }
 
 /** Bare arm name when the arms match; annotated with model (and runner when runners differ) otherwise. */
