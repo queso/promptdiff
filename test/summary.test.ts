@@ -89,3 +89,41 @@ test("summaries without failing runs carry no grader evidence blocks", () => {
   expect(text).not.toContain("grader stdout");
   expect(text).not.toContain("failed:");
 });
+
+test("weak deltas get a sampling-noise note; strong ones and no-deltas do not", () => {
+  const weak = formatCompareSummary(
+    summary({
+      cases: [{
+        name: "weak", kind: "target",
+        baseline: arm("baseline", [run(1, true), run(2, false), run(3, false)]),
+        proposed: arm("proposed", [run(1, true), run(2, true), run(3, false)]),
+        assertions: [], samplingP: 1,
+      }],
+    }),
+  );
+  expect(weak).toContain("NOTE: delta could be sampling noise (Fisher exact p=1.00)");
+
+  const strong = formatCompareSummary(
+    summary({
+      cases: [{
+        name: "strong", kind: "target",
+        baseline: arm("baseline", new Array(5).fill(0).map((_, i) => run(i + 1, false))),
+        proposed: arm("proposed", new Array(5).fill(0).map((_, i) => run(i + 1, true))),
+        assertions: [], samplingP: 2 / 252,
+      }],
+    }),
+  );
+  expect(strong).not.toContain("sampling noise");
+
+  const noDelta = formatCompareSummary(
+    summary({
+      cases: [{
+        name: "flat", kind: "regression",
+        baseline: arm("baseline", [run(1, true)]),
+        proposed: arm("proposed", [run(1, true)]),
+        assertions: [], samplingP: 1,
+      }],
+    }),
+  );
+  expect(noDelta).not.toContain("sampling noise");
+});

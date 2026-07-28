@@ -2,6 +2,7 @@ import { assembleSystemPrompt } from "../prompt";
 import type { Runner, RunnerRunOptions, RunResult } from "../types";
 import type { ArmConfig, CompareConfig, EvalCaseConfig, ScenarioKind } from "./config";
 import { renderStrict, type RenderVars } from "./render";
+import { fisherExactTwoTailedP } from "./stats";
 import { gradeRun, type GradeResult } from "./grader";
 import { prepareSandbox } from "./sandbox";
 import { installSkills } from "./skill-install";
@@ -32,6 +33,8 @@ export interface CaseSummary {
   baseline: ArmSummary;
   proposed: ArmSummary;
   assertions: string[];
+  /** Two-tailed Fisher exact p for the pass/fail table — how easily noise explains the delta. */
+  samplingP?: number;
 }
 
 export interface CompareSummary {
@@ -74,6 +77,7 @@ export async function runCompare(options: CompareRunOptions): Promise<CompareSum
       baseline,
       proposed,
       assertions: evaluateAssertions(evalCase, baseline, proposed),
+      samplingP: fisherExactTwoTailedP(baseline.passes, baseline.totalRuns, proposed.passes, proposed.totalRuns),
     });
   }
 
@@ -118,6 +122,18 @@ export function formatCompareSummary(summary: CompareSummary): string {
       lines.push("  INFO: no assertion (kind \"compare\")");
     } else {
       lines.push("  PASS: assertions satisfied");
+    }
+
+    // A pass-rate delta that noise explains must not read like a receipt:
+    // 1/3 → 2/3 passes the target assertion but is close to a coin flip.
+    if (
+      caseSummary.samplingP !== undefined &&
+      caseSummary.baseline.passes !== caseSummary.proposed.passes &&
+      caseSummary.samplingP > 0.05
+    ) {
+      lines.push(
+        `  NOTE: delta could be sampling noise (Fisher exact p=${caseSummary.samplingP.toFixed(2)}) — consider more runs`,
+      );
     }
 
     // Failing runs carry their grader evidence into the summary — diagnosing
