@@ -40,6 +40,7 @@ export interface CaseSummary {
 export interface CompareSummary {
   name: string;
   arms: { baseline: ArmConfig; proposed: ArmConfig };
+  productionModel?: string;
   cases: CaseSummary[];
   failedAssertions: string[];
   totalCostUsd: number;
@@ -92,6 +93,7 @@ export async function runCompare(options: CompareRunOptions): Promise<CompareSum
   return {
     name: config.name,
     arms: config.arms,
+    productionModel: config.productionModel,
     cases,
     failedAssertions,
     totalCostUsd,
@@ -150,6 +152,16 @@ export function formatCompareSummary(summary: CompareSummary): string {
   lines.push("", `total cost: $${summary.totalCostUsd.toFixed(4)}`);
   if ((summary.arms.baseline.runner === "openai") !== (summary.arms.proposed.runner === "openai")) {
     lines.push("note: cost columns are not comparable — the openai runner reports $0 (tokens only)");
+  }
+  // A pass on the wrong model validates prompt logic, not production behavior —
+  // that divergence must be on the receipt, not in a README caveat.
+  for (const armName of ["baseline", "proposed"] as const) {
+    const model = summary.arms[armName].model;
+    if (summary.productionModel !== undefined && model !== summary.productionModel) {
+      lines.push(
+        `warning: ${armName} tests "${model}" but production model is "${summary.productionModel}" — this validates prompt logic, not production behavior`,
+      );
+    }
   }
   if (summary.failedAssertions.length > 0) {
     lines.push("failed assertions:");

@@ -127,3 +127,35 @@ test("weak deltas get a sampling-noise note; strong ones and no-deltas do not", 
   );
   expect(noDelta).not.toContain("sampling noise");
 });
+
+test("arms diverging from the declared production model are flagged", () => {
+  const diverged = formatCompareSummary(
+    summary({
+      productionModel: "gpt-5.5",
+      cases: [{
+        name: "t", kind: "compare",
+        baseline: arm("baseline", [run(1, true)]),
+        proposed: arm("proposed", [run(1, true)]),
+        assertions: [],
+      }],
+    }),
+  );
+  expect(diverged).toContain('warning: baseline tests "sonnet" but production model is "gpt-5.5"');
+  expect(diverged).toContain('warning: proposed tests "sonnet" but production model is "gpt-5.5"');
+
+  const matching = formatCompareSummary(
+    summary({
+      productionModel: "sonnet",
+      cases: [{
+        name: "t", kind: "compare",
+        baseline: arm("baseline", [run(1, true)]),
+        proposed: arm("proposed", [run(1, true)]),
+        assertions: [],
+      }],
+    }),
+  );
+  expect(matching).not.toContain("production model");
+
+  const undeclared = formatCompareSummary(summary({}));
+  expect(undeclared).not.toContain("production model");
+});
