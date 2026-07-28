@@ -1,6 +1,6 @@
 import type { Runner } from "../types";
 import { ClaudePrintRunner } from "./claude-p";
-import { OpenAiCompatRunner } from "./openai-compat";
+import { OpenAiCompatRunner, type ModelPricing } from "./openai-compat";
 
 export const RUNNER_NAMES = ["claude-p", "openai"] as const;
 
@@ -9,8 +9,10 @@ export type RunnerName = (typeof RUNNER_NAMES)[number];
 export interface CreateRunnerOptions {
   /** OpenAI-compatible endpoint base URL; ignored by claude-p. */
   baseUrl?: string;
-  /** Timeout retries for the openai runner; ignored by claude-p. */
+  /** Transient-failure retries for the openai runner; ignored by claude-p. */
   retries?: number;
+  /** USD-per-M-token pricing for the openai runner; claude-p prices itself. */
+  pricing?: ModelPricing;
 }
 
 export function createRunner(name: RunnerName, options: CreateRunnerOptions = {}): Runner {
@@ -18,7 +20,7 @@ export function createRunner(name: RunnerName, options: CreateRunnerOptions = {}
     case "claude-p":
       return new ClaudePrintRunner();
     case "openai":
-      return new OpenAiCompatRunner({ baseUrl: options.baseUrl, retries: options.retries });
+      return new OpenAiCompatRunner({ baseUrl: options.baseUrl, retries: options.retries, pricing: options.pricing });
   }
 }
 

@@ -77,9 +77,14 @@ system prompt and the scenario prompt become the `system` and `user` messages.
 a bearer token when set (local servers need none).
 
 Text mode only — no tools, no sandbox execution, no skill registry, so it pairs
-with text graders. Cost is reported as 0 (these endpoints report tokens, not
-USD; token usage is preserved in the raw result), and each run is exactly one
-completion, so the budget bound is structural rather than enforced.
+with text graders. These endpoints report tokens, not USD, so pricing is
+user-declared: scenario `pricing` (per-model USD per million input/output
+tokens) or `run --price in,out`. Priced runs compute real cost from response
+`usage`, enforce `maxBudgetUsd` post-hoc (a completed completion cannot be
+aborted mid-request; over-budget runs error rather than retry), and fail
+loudly when a priced endpoint returns no usage. Unpriced runs report 0 —
+true for local servers — and are bounded only by being single completions.
+Raw usage is always preserved in the raw result.
 
 Vision: this is the only runner declaring the `images` capability. Scenario
 `images` (or `run --image`) are embedded as base64 data-URI `image_url`

@@ -157,3 +157,59 @@ test("loadCompareConfig resolves per-arm models/runners and shared skills", () =
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test("pricing parses per-model rates and rejects gaps for openai arms", () => {
+  const dir = mkdtempSync(join(tmpdir(), "promptdiff-pricing-config-"));
+  try {
+    writeFileSync(join(dir, "agent.md"), "Agent", "utf8");
+    writeFileSync(join(dir, "skill.md"), "Skill", "utf8");
+    const base = {
+      agent: "./agent.md",
+      skills: ["./skill.md"],
+      runner: "openai",
+      model: "gpt-4o-mini",
+      scenarios: [{ name: "t", prompt: "p", grader: { type: "text", contains: ["ok"] } }],
+    };
+
+    writeFileSync(
+      join(dir, "priced.json"),
+      JSON.stringify({ ...base, pricing: { "gpt-4o-mini": { input: 0.15, output: 0.6 } } }),
+      "utf8",
+    );
+    const config = loadCompareConfig(join(dir, "priced.json"));
+    expect(config.pricing).toEqual({ "gpt-4o-mini": { input: 0.15, output: 0.6 } });
+
+    // Pricing declared but missing the arm's model — silent $0 is the bug
+    // this feature closes, so it fails at load.
+    writeFileSync(
+      join(dir, "gap.json"),
+      JSON.stringify({ ...base, pricing: { "other-model": { input: 1, output: 1 } } }),
+      "utf8",
+    );
+    expect(() => loadCompareConfig(join(dir, "gap.json"))).toThrow(
+      /pricing is declared but has no entry for baseline model "gpt-4o-mini"/,
+    );
+
+    // claude-p arms price themselves; a pricing map without their model is fine.
+    writeFileSync(
+      join(dir, "claude.json"),
+      JSON.stringify({
+        ...base,
+        runner: "claude-p",
+        model: "sonnet",
+        pricing: { "gpt-4o-mini": { input: 1, output: 1 } },
+      }),
+      "utf8",
+    );
+    expect(loadCompareConfig(join(dir, "claude.json")).pricing).toBeDefined();
+
+    writeFileSync(
+      join(dir, "negative.json"),
+      JSON.stringify({ ...base, pricing: { "gpt-4o-mini": { input: -1, output: 1 } } }),
+      "utf8",
+    );
+    expect(() => loadCompareConfig(join(dir, "negative.json"))).toThrow(/non-negative "input" and "output"/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

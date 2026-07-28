@@ -60,8 +60,9 @@ Run from the repo:
 
 Paid model calls are bounded by default:
 
-- `--max-budget-usd 1` per invocation (enforced by the claude-p runner; the
-  openai runner is a single completion per run, so cost is bounded by design)
+- `--max-budget-usd 1` per invocation — enforced by claude-p natively, and by
+  the openai runner whenever `pricing` is set (unpriced openai runs report $0
+  and are bounded only by being single completions)
 - `--timeout-ms 600000` per invocation
 - fresh sandbox working directories under `.promptdiff/`
 - `run --mode text` disables tools with `--tools ""`
@@ -157,6 +158,13 @@ Two more top-level scenario fields tune the openai runner in `compare`:
   merged into the chat-completions request body (they can never clobber
   `model` or `messages`). Useful for pinning temperature so pass-rate deltas
   reflect the prompt, not sampling noise.
+- `"pricing": { "gpt-4o-mini": { "input": 0.15, "output": 0.60 } }` — USD per
+  million input/output tokens, keyed by model (so mixed-model compares price
+  each arm correctly). With pricing set, cost columns are computed from each
+  response's `usage` and `maxBudgetUsd` actually enforces; a priced endpoint
+  that returns no usage fails loudly instead of reporting $0. Unpriced openai
+  arms keep reporting $0, which is the truth for local servers. On `run`, the
+  equivalent is `--price 0.15,0.60`.
 - `"retries": 2` (the default) — extra attempts after a *transient* failure:
   timeout, connection error, HTTP 429 or 5xx, with exponential backoff and a
   per-attempt timeout. One `503 service overloaded` no longer throws away a

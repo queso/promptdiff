@@ -155,7 +155,7 @@ export function formatCompareSummary(summary: CompareSummary): string {
 
   lines.push("", `total cost: $${summary.totalCostUsd.toFixed(4)}`);
   if ((summary.arms.baseline.runner === "openai") !== (summary.arms.proposed.runner === "openai")) {
-    lines.push("note: cost columns are not comparable — the openai runner reports $0 (tokens only)");
+    lines.push('note: cost columns may not be comparable — openai arms report $0 unless "pricing" is set');
   }
   // A pass on the wrong model validates prompt logic, not production behavior —
   // that divergence must be on the receipt, not in a README caveat.

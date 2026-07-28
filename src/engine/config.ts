@@ -4,6 +4,7 @@ import type { GraderSpec } from "./grader";
 import { resolveRenderVars, type RenderVars } from "./render";
 import { deliveryValue, type Delivery } from "./skill-install";
 import { runnerNameValue, type RunnerName } from "../runner";
+import type { ModelPricing } from "../runner/openai-compat";
 import type { RunMode } from "../types";
 
 export type ScenarioKind = "target" | "regression" | "compare";
@@ -41,8 +42,13 @@ export interface CompareConfig {
   arms: { baseline: ArmConfig; proposed: ArmConfig };
   /** Extra chat-request body fields (max_tokens, temperature, ...); openai runner only. */
   requestParams?: Record<string, unknown>;
-  /** Timeout retries per model call; openai runner only. Default 0. */
+  /** Transient-failure retries per model call; openai runner only. Default 2. */
   retries?: number;
+  /**
+   * USD per million input/output tokens, keyed by model name — prices openai
+   * arms from response usage so maxBudgetUsd enforces. claude-p prices itself.
+   */
+  pricing?: Record<string, ModelPricing>;
   /**
    * Template bindings for {{name}} placeholders in the agent, inlined skills,
    * and scenario prompts. Presence (even empty) turns on strict rendering:
@@ -99,6 +105,7 @@ interface RawCompareConfig {
   baseUrl?: unknown;
   requestParams?: unknown;
   retries?: unknown;
+  pricing?: unknown;
   render?: unknown;
   model?: unknown;
   productionModel?: unknown;
@@ -170,6 +177,7 @@ export function loadCompareConfig(path: string, overrides: CompareOverrides = {}
     },
     requestParams: raw.requestParams === undefined ? undefined : recordOf(raw.requestParams, "requestParams"),
     retries: raw.retries === undefined ? undefined : numberValue(raw.retries, 0),
+    pricing: pricingValue(raw.pricing),
     renderVars: renderValue(raw.render, baseDir, "render"),
     productionModel: stringValue(raw.productionModel, undefined),
     runs: overrides.runs ?? numberValue(raw.runs, 5),
@@ -235,6 +243,16 @@ function validateCompareConfig(config: CompareConfig): void {
       }
     }
   }
+  if (config.pricing !== undefined) {
+    for (const armName of ["baseline", "proposed"] as const) {
+      const arm = config.arms[armName];
+      // Declared-but-incomplete pricing silently reverts an arm to $0 — the
+      // exact decorative-budget failure pricing exists to close.
+      if (arm.runner === "openai" && config.pricing[arm.model] === undefined) {
+        throw new Error(`pricing is declared but has no entry for ${armName} model ${JSON.stringify(arm.model)}`);
+      }
+    }
+  }
   if (config.delivery === "install") {
     if (config.tools === "" || config.cases.some((evalCase) => evalCase.tools === "")) {
       throw new Error('delivery "install" needs tools enabled: skills are invoked via the Skill tool, so tools "" can never trigger them');
@@ -243,6 +261,22 @@ function validateCompareConfig(config: CompareConfig): void {
       throw new Error('render applies to inlined prompt text; delivery "install" copies skill files verbatim, so placeholders cannot be bound');
     }
   }
+}
+
+function pricingValue(value: unknown): Record<string, ModelPricing> | undefined {
+  if (value === undefined) return undefined;
+  const record = recordOf(value, "pricing");
+  const pricing: Record<string, ModelPricing> = {};
+  for (const [model, entry] of Object.entries(record)) {
+    const rates = recordOf(entry, `pricing.${JSON.stringify(model)}`);
+    const input = numberValue(rates.input, NaN);
+    const output = numberValue(rates.output, NaN);
+    if (!Number.isFinite(input) || !Number.isFinite(output) || input < 0 || output < 0) {
+      throw new Error(`pricing.${JSON.stringify(model)} needs non-negative "input" and "output" (USD per million tokens)`);
+    }
+    pricing[model] = { input, output };
+  }
+  return pricing;
 }
 
 function renderValue(value: unknown, baseDir: string, label: string): RenderVars | undefined {
