@@ -6,6 +6,7 @@ import type { ArmConfig, CompareConfig, EvalCaseConfig, ScenarioKind } from "./c
 import { renderStrict, type RenderVars } from "./render";
 import { fisherExactTwoTailedP } from "./stats";
 import { gradeRun, type GradeResult } from "./grader";
+import { assertJudgeCalibrated } from "./judge";
 import { prepareSandbox } from "./sandbox";
 import { installSkills } from "./skill-install";
 
@@ -66,6 +67,7 @@ export async function runCompare(options: CompareRunOptions): Promise<CompareSum
   // violating arm before either arm's paid runs.
   validateRunnerSupport(config, runners.baseline);
   validateRunnerSupport(config, runners.proposed);
+  assertJudgeGradersCalibrated(config);
   // Install delivery keeps skill text out of the system prompt entirely — the
   // arms differ only by which skill directory lands in the sandbox registry.
   const inline = config.delivery !== "install";
@@ -215,6 +217,19 @@ function armLabel(name: "baseline" | "proposed", arms: { baseline: ArmConfig; pr
 }
 
 /**
+ * The judge calibration gate, run alongside validateRunnerSupport — BEFORE any
+ * paid run. Missing, stale, mismatched, or below-bar calibration refuses the
+ * whole comparison; an unproven judge must never certify a result.
+ */
+function assertJudgeGradersCalibrated(config: CompareConfig): void {
+  for (const evalCase of config.cases) {
+    if (evalCase.grader.type === "judge") {
+      assertJudgeCalibrated(evalCase.grader);
+    }
+  }
+}
+
+/**
  * Rejects scenario demands the runner cannot honor — before any paid run,
  * instead of mid-comparison or (worse) via a silently tool-less arm.
  */
@@ -273,6 +288,7 @@ export interface MeasureRunOptions {
 export async function runMeasure(options: MeasureRunOptions): Promise<MeasureSummary> {
   const { config, runner, onProgress } = options;
   validateRunnerSupport(config, runner);
+  assertJudgeGradersCalibrated(config);
   const inline = config.delivery !== "install";
   const basePrompt = assembleSystemPrompt(config.agent, inline ? config.baselineSkills : []);
   // Same fail-before-any-paid-run guarantee as compare: render everything first.
@@ -429,7 +445,12 @@ async function runArm(
         }
       }
       const run = await runner.run(buildRunnerOptions(config, evalCase, arm, systemPrompt, sandbox.dir));
-      const grade = await gradeRun(evalCase.grader, { run, sandboxDir: sandbox.dir });
+      const grade = await gradeRun(evalCase.grader, {
+        run,
+        sandboxDir: sandbox.dir,
+        timeoutMs: config.timeoutMs,
+        maxBudgetUsd: config.maxBudgetUsd,
+      });
       summaries.push(toArmRunSummary(index + 1, run, grade, sandbox.dir));
     } finally {
       sandbox.cleanup();
@@ -491,7 +512,8 @@ function toArmRunSummary(
     run: runNumber,
     pass: grade.pass,
     grade,
-    costUsd: run.costUsd,
+    // Judge graders bill their own model call; totals stay honest only if it counts.
+    costUsd: run.costUsd + (grade.costUsd ?? 0),
     turns: run.turns,
     durationMs: run.durationMs,
     sandboxDir,
@@ -527,8 +549,8 @@ function evaluateAssertions(
 }
 
 function inferMode(evalCase: EvalCaseConfig): "text" | "artifact" {
-  // text and json graders inspect the run's output only, so they demand no
-  // sandbox tools and stay valid on text-only runners (openai).
+  // text, json, and judge graders inspect the run's output only, so they
+  // demand no sandbox tools and stay valid on text-only runners (openai).
   return evalCase.grader.type === "command" ? "artifact" : "text";
 }
 

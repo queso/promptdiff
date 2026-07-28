@@ -229,9 +229,36 @@ output is also written into the sandbox and exposed to command graders as
 `$PROMPTDIFF_OUTPUT_FILE`, so completion-only runs can be command-graded
 (scenario `mode: "text"` keeps the tools demand at zero).
 
-LLM judges are intentionally not implemented yet. They would add a second billed
-call per run and should be reserved for cases that cannot be expressed as local
-checks.
+LLM judges are implemented, WITH mandatory calibration, for judgments that
+cannot be expressed as local checks (semantic and style rubrics that regex
+both under- and over-catches). The design premise is that an uncalibrated
+judge is worse than the regex it replaces — same wrongness, more confidence,
+higher cost — so judge graders refuse to grade until proven:
+
+- A judge grader is `{ "type": "judge", "rubric": <markdown file>, "model":
+  <judge model>, "runner": <claude-p|openai>, "baseUrl"?, "minAccuracy"?
+  (default 0.9) }`. The rubric becomes the judge's system prompt verbatim,
+  plus a fixed harness instruction demanding one JSON verdict object; the
+  graded output is the user prompt. The judge model is explicit on purpose
+  and never defaults to the arm's model (self-grading bias). The last
+  balanced JSON object in the reply wins (reasoning models add prose); no
+  valid verdict fails the graded run, never passes it.
+- Labeled fixtures live in a sibling directory,
+  `<rubric-stem>.fixtures/pass/*.md` (outputs the judge must call clean) and
+  `.../fail/*.md` (outputs it must flag). `promptdiff calibrate` runs the
+  judge over every fixture and writes `<rubric>.calibration.json` next to
+  the rubric — committable, keyed by rubric content hash.
+- The gate: at compare/measure startup, before any paid run, every judge
+  grader must have a calibration record that exists, matches the current
+  rubric sha256 and the spec's model/runner, and clears `minAccuracy` on
+  BOTH classes. Per-class bars on purpose: a judge that passes everything is
+  100% on the pass class and 0% on the fail class; overall accuracy hides it.
+- v1 judges are absolute (grade one output against the rubric); pairwise
+  comparison is deferred. The calibration gate is the escalation signal: a
+  rubric whose absolute judge cannot clear the bar is the case for pairwise.
+
+A judge adds one billed model call per graded run (its cost is added to the
+run's cost), so deterministic graders remain the default choice.
 
 ## 7. Architecture
 
@@ -282,5 +309,6 @@ always runs fresh. Deleting the cache directory busts it.
 - Claude Code `-p` runner first; OpenAI-compatible endpoints second. Runner
   capabilities are validated up front rather than degraded silently.
 - Inline skills for variant control.
-- Deterministic graders first; LLM judges later if needed.
+- Deterministic graders first; LLM judges only behind a mandatory calibration
+  gate (absolute mode in v1, pairwise deferred).
 - Per-run sandbox cwd, timeout, and budget bounds are mandatory for paid runs.

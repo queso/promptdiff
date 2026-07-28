@@ -223,7 +223,7 @@ function normalizeCase(baseDir: string, raw: RawCase, index: number): EvalCaseCo
     name,
     kind: kindValue(raw.kind, index === 0 ? "target" : "regression"),
     prompt,
-    grader: graderValue(raw.grader, name),
+    grader: graderValue(raw.grader, name, baseDir),
     images: stringArray(raw.images, `${name}.images`).map((image) => resolveFrom(baseDir, image)),
     renderVars: renderValue(raw.render, baseDir, `${name}.render`),
     runs: optionalNumber(raw.runs, `${name}.runs`),
@@ -339,7 +339,7 @@ function armRecord(value: unknown): Record<string, unknown> {
   return isRecord(value) && !Array.isArray(value) ? value : {};
 }
 
-function graderValue(value: unknown, scenarioName: string): GraderSpec {
+function graderValue(value: unknown, scenarioName: string, baseDir: string): GraderSpec {
   if (!isRecord(value)) {
     throw new Error(`${scenarioName}.grader must be an object`);
   }
@@ -386,7 +386,28 @@ function graderValue(value: unknown, scenarioName: string): GraderSpec {
       expectExitCode: optionalNumber(value.expectExitCode, `${scenarioName}.grader.expectExitCode`),
     };
   }
-  throw new Error(`${scenarioName}.grader.type must be "text", "json", or "command"`);
+  if (value.type === "judge") {
+    const rubric = resolveFrom(baseDir, requiredString(value.rubric, `${scenarioName}.grader.rubric`));
+    // A missing rubric must fail at load time, not after the other arm's paid runs.
+    if (!existsSync(rubric)) {
+      throw new Error(`${scenarioName}.grader.rubric: file not found: ${rubric}`);
+    }
+    const minAccuracy = optionalNumber(value.minAccuracy, `${scenarioName}.grader.minAccuracy`) ?? 0.9;
+    if (minAccuracy < 0 || minAccuracy > 1) {
+      throw new Error(`${scenarioName}.grader.minAccuracy must be between 0 and 1`);
+    }
+    return {
+      type: "judge",
+      rubric,
+      // The judge model is required and never defaults to the arm's model —
+      // a model grading its own output is the bias judges exist to avoid.
+      model: requiredString(value.model, `${scenarioName}.grader.model`),
+      runner: runnerNameValue(value.runner, "claude-p"),
+      baseUrl: stringValue(value.baseUrl, undefined),
+      minAccuracy,
+    };
+  }
+  throw new Error(`${scenarioName}.grader.type must be "text", "json", "command", or "judge"`);
 }
 
 function kindValue(value: unknown, fallback: ScenarioKind): ScenarioKind {
