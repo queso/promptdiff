@@ -6,6 +6,7 @@ import { prepareSandbox } from "./engine/sandbox";
 import { installSkills, type Delivery } from "./engine/skill-install";
 import { renderStrict, resolveRenderVars, type RenderVars } from "./engine/render";
 import { appendNdjsonReport } from "./engine/report";
+import { buildCompareReceipts, buildMeasureReceipts, writeReceipts } from "./engine/receipt";
 import { assembleSystemPrompt } from "./prompt";
 import { createRunner, RUNNER_NAMES, type RunnerName } from "./runner";
 import type { ModelPricing } from "./runner/openai-compat";
@@ -63,6 +64,7 @@ const compareSpecs: FlagSpecs = {
   "keep-sandbox": { arity: "none" },
   report: { arity: "one" },
   "report-out": { arity: "one" },
+  receipts: { arity: "one" },
 };
 
 export async function main(argv: string[]): Promise<number> {
@@ -213,6 +215,7 @@ const measureSpecs: FlagSpecs = {
   "timeout-ms": { arity: "one" },
   "max-budget-usd": { arity: "one" },
   "keep-sandbox": { arity: "none" },
+  receipts: { arity: "one" },
 };
 
 async function cmdMeasure(argv: string[]): Promise<void> {
@@ -248,6 +251,12 @@ async function cmdMeasure(argv: string[]): Promise<void> {
     runner: armRunner(config.arms.baseline, config),
     onProgress: (message) => console.error(`[promptdiff] ${message}`),
   });
+
+  const receiptsDir = args.one("receipts");
+  if (receiptsDir) {
+    const written = writeReceipts(receiptsDir, buildMeasureReceipts(summary, config, new Date().toISOString()));
+    console.error(`[promptdiff] wrote ${written.length} receipt(s) to ${receiptsDir}`);
+  }
 
   console.log(formatMeasureSummary(summary));
 }
@@ -309,6 +318,12 @@ async function cmdCompare(argv: string[]): Promise<number> {
   if (report === "ndjson" && reportOut) {
     const count = appendNdjsonReport(reportOut, summary);
     console.error(`[promptdiff] appended ${count} record(s) to ${reportOut}`);
+  }
+  // Receipts too: a failing receipt is what stops the prompt from shipping.
+  const receiptsDir = args.one("receipts");
+  if (receiptsDir) {
+    const written = writeReceipts(receiptsDir, buildCompareReceipts(summary, config, new Date().toISOString()));
+    console.error(`[promptdiff] wrote ${written.length} receipt(s) to ${receiptsDir}`);
   }
 
   console.log(formatCompareSummary(summary));
@@ -459,6 +474,13 @@ function compareUsage(): string {
     "  pass rates, cost, sampling p, prompt hashes, productionModel. Append-only",
     "  history that answers \"has this drifted since July?\" without hand notes.",
     "",
+    "receipts:",
+    "  --receipts <dir> writes one <scenario>.receipt.json per scenario",
+    "  (overwritten each run): per-file sha256 of the agent and every skill,",
+    "  arm results, and a pass/fail verdict. CI in a consuming repo can then",
+    "  assert every shipped prompt has a passing receipt for its CURRENT hash —",
+    "  editing a prompt stales its receipt and names the scenario to re-run.",
+    "",
     "model comparison:",
     "  hold the skills constant and vary the model per arm. A top-level \"skills\"",
     "  array is inherited by both arms, and the record form of \"baseline\"/",
@@ -535,7 +557,10 @@ function measureUsage(): string {
     "           --runner <claude-p|openai> --base-url <url> --runs <n>",
     "           --mode <text|artifact> --tools <tools|default|''>",
     "           --sandbox <dir> --seed <dir> --keep-sandbox",
-    "           --timeout-ms <ms> --max-budget-usd <usd>",
+    "           --timeout-ms <ms> --max-budget-usd <usd> --receipts <dir>",
+    "",
+    "--receipts <dir> writes one <scenario>.receipt.json per scenario with",
+    "per-file prompt hashes and the measured rates (verdict \"measured\").",
     "",
     "Exit code is 0 whenever the runs complete — a measurement has no pass/fail.",
   ].join("\n");

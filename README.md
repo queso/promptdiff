@@ -286,6 +286,32 @@ prompt, and `productionModel`. Append-only NDJSON — diffable, greppable, and
 queryable months later ("has the catch rate drifted since July?") without
 hand-transcribing summaries. Failed comparisons are recorded too.
 
+### Receipts
+
+`--receipts <dir>` (on `compare` and `measure`) writes one
+`<scenario>.receipt.json` per scenario, overwritten each run — a receipt is
+*current state*; the ndjson report is the history. Each receipt records the
+repo-relative path and content sha256 of the agent and every skill file
+(install-delivery skill directories get a deterministic tree hash covering
+supporting files), the arm results, sampling p, and a verdict: `pass`/`fail`
+for asserted scenarios, `none` for `"kind": "compare"`, `measured` for
+measure runs.
+
+This replaces hand-maintained `prompt_version` strings with content
+addressing: a consuming repo's CI can assert that every prompt it ships has
+a passing receipt for its **current** hash —
+
+```bash
+current=$(sha256sum flows/post/prompts/editorial.md | cut -d' ' -f1)
+jq -e --arg h "$current" \
+  '.verdict == "pass" and ([.prompts.proposedSkills[].sha256] | index($h))' \
+  receipts/editorial-gate.receipt.json
+```
+
+Edit the prompt and the hash changes, the receipt goes stale, and the check
+names exactly which scenario to re-run. No version bump to remember, no way
+to ship a prompt whose eval never ran.
+
 ## Measure: characterize before you change
 
 `compare` answers "did the change help?" — `measure` answers the question
