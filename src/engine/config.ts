@@ -137,7 +137,20 @@ interface RawCase {
   tools?: unknown;
 }
 
-export function loadCompareConfig(path: string, overrides: CompareOverrides = {}): CompareConfig {
+export interface LoadOptions {
+  /**
+   * measure mode: only one instruction set is exercised, so a scenario with
+   * just `skills` or `baselineSkills` loads without a proposed set (the
+   * unused proposed arm mirrors baseline).
+   */
+  singleArm?: boolean;
+}
+
+export function loadCompareConfig(
+  path: string,
+  overrides: CompareOverrides = {},
+  options: LoadOptions = {},
+): CompareConfig {
   const configPath = resolve(path);
   const baseDir = dirname(configPath);
   const raw = JSON.parse(readFileSync(configPath, "utf8")) as RawCompareConfig;
@@ -146,7 +159,11 @@ export function loadCompareConfig(path: string, overrides: CompareOverrides = {}
   const rawBaseline = raw.baselineSkills ?? raw.baseline;
   const rawProposed = raw.proposedSkills ?? raw.proposed;
   const baselineSkills = overrides.baselineSkills ?? normalizeSkills(rawBaseline, "baseline", sharedSkills);
-  const proposedSkills = overrides.proposedSkills ?? normalizeSkills(rawProposed, "proposed", sharedSkills);
+  const proposedSkills =
+    overrides.proposedSkills ??
+    (options.singleArm && rawProposed === undefined && sharedSkills === undefined
+      ? baselineSkills
+      : normalizeSkills(rawProposed, "proposed", sharedSkills));
 
   const rawSandbox = isRecord(raw.sandbox) ? raw.sandbox : {};
   const sandboxRoot = overrides.sandboxRoot ?? resolveFrom(baseDir, stringValue(rawSandbox.root, ".promptdiff/runs"));
