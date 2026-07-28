@@ -178,7 +178,12 @@ receipt now says how thin its evidence is. Scenarios may declare
 `productionModel`; arms testing a different model are flagged in the summary.
 `--report ndjson --report-out <file>` appends per-scenario records (arms,
 rates, cost, sampling p, rendered-prompt sha256 hashes) as append-only run
-history.
+history. `--receipts <dir>` writes per-scenario receipt files (overwritten
+each run) recording the content hash of every prompt file tested plus the
+verdict — content addressing instead of hand-maintained prompt_version
+strings, so a consuming repo's CI can require a passing receipt for each
+shipped prompt's current hash. Reports are history; receipts are current
+state.
 
 `compare` scenarios assert nothing: they exist to report both arms' pass
 rates and the delta, for comparisons (typically model-vs-model) where neither
