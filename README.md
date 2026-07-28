@@ -255,6 +255,29 @@ Useful overrides:
 must not fully pass and proposed must improve the pass rate. For regression
 scenarios, proposed must not fall below baseline.
 
+Reading results:
+
+- Failing runs print their grader message plus the tail of grader
+  stdout/stderr directly in the summary, so one compare run tells you *which*
+  check missed without a `--keep-sandbox` re-run.
+- Deltas that sampling noise could explain are labelled
+  (`NOTE: delta could be sampling noise (Fisher exact p=0.47)`). Assertions
+  and exit codes are unchanged — the label keeps a 1/3 → 2/3 "win" from
+  reading like a receipt. At n=3 per arm, even 0/3 → 3/3 only reaches p=0.10;
+  use more runs when the claim matters.
+- Declare `"productionModel": "gpt-5.5"` and any arm testing a different
+  model gets a warning on the summary — a pass on the wrong model validates
+  prompt logic, not production behavior.
+
+### Run history
+
+`--report ndjson --report-out ./runs.ndjson` appends one record per scenario
+per invocation: timestamp, arms (model, runner, passes, cost), delta,
+sampling p, failed assertions, sha256 hashes of each arm's rendered system
+prompt, and `productionModel`. Append-only NDJSON — diffable, greppable, and
+queryable months later ("has the catch rate drifted since July?") without
+hand-transcribing summaries. Failed comparisons are recorded too.
+
 ## Comparing models
 
 The A/B variable does not have to be the skill text. Hold the prompt and

@@ -87,9 +87,13 @@ content parts ahead of the prompt text — jpg/jpeg/png/webp/gif, validated for
 existence at load time. Two scenario fields tune the endpoint: `requestParams`
 merges extra fields into the request body (spread first, so it can never
 clobber `model` or `messages` — pin `temperature` here to keep pass-rate
-deltas about the prompt), and `retries` re-attempts timed-out or
-connection-failed requests for flaky local servers while HTTP errors and
-malformed responses still fail immediately.
+deltas about the prompt), and `retries` (default 2) re-attempts transient
+failures — timeouts, connection errors, HTTP 429/5xx — with exponential
+backoff and a per-attempt timeout, so one overloaded-endpoint response cannot
+abort a whole compare. Deterministic failures (other 4xx, malformed
+responses) fail immediately without burning retries. claude-p is excluded on
+purpose: the CLI manages its own transport, and retrying non-zero exits
+would re-run budget aborts.
 
 ## 4. A/B Variable
 
@@ -161,6 +165,15 @@ Target assertions:
 Regression assertions:
 
 1. proposed must not fall below baseline pass rate
+
+Every case also carries a two-tailed Fisher exact p for its pass/fail table;
+the summary labels deltas with p > 0.05 as explainable by sampling noise.
+This is a label, not a gate — assertions and exit codes are unchanged, but a
+receipt now says how thin its evidence is. Scenarios may declare
+`productionModel`; arms testing a different model are flagged in the summary.
+`--report ndjson --report-out <file>` appends per-scenario records (arms,
+rates, cost, sampling p, rendered-prompt sha256 hashes) as append-only run
+history.
 
 `compare` scenarios assert nothing: they exist to report both arms' pass
 rates and the delta, for comparisons (typically model-vs-model) where neither
