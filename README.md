@@ -426,6 +426,25 @@ scenario so no tools are demanded, and script against the file:
 }
 ```
 
+## Designing good fixtures
+
+Lessons from production compare runs, for scenario authors:
+
+- **Don't seed the answer key.** If the primary sources live inside the
+  sandbox, any thorough agent can "verify" claims by adjacency and both arms
+  pass for the wrong reason. Cite out-of-sandbox paths or URLs so
+  re-derivation is the discriminating behavior.
+- **Planted defects must be unambiguous.** A one-word quote diff grades as
+  pedantry; a clear paraphrase grades cleanly. The answer key belongs in the
+  grader — never in the fixture itself.
+- **Set the pass bar where the policy value is.** Mechanical holes (wrong
+  dates, dead links) fall to any tools-capable agent; the bar has to require
+  the defect classes only the prompt-under-test knows about, or the eval
+  can't tell your prompt from no prompt.
+- **Prove the gap exists before trusting the fix.** That's what target
+  scenarios' "baseline must not fully pass" assertion is for — a fixture the
+  baseline aces can't certify an improvement.
+
 ## Security note
 
 Command graders execute arbitrary shell commands from scenario files (inside
