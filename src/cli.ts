@@ -5,6 +5,7 @@ import { formatCompareSummary, runCompare } from "./engine/compare";
 import { prepareSandbox } from "./engine/sandbox";
 import { installSkills, type Delivery } from "./engine/skill-install";
 import { renderStrict, resolveRenderVars, type RenderVars } from "./engine/render";
+import { appendNdjsonReport } from "./engine/report";
 import { assembleSystemPrompt } from "./prompt";
 import { createRunner, RUNNER_NAMES, type RunnerName } from "./runner";
 import type { RunMode, Runner, RunnerRunOptions } from "./types";
@@ -58,6 +59,8 @@ const compareSpecs: FlagSpecs = {
   "timeout-ms": { arity: "one" },
   "max-budget-usd": { arity: "one" },
   "keep-sandbox": { arity: "none" },
+  report: { arity: "one" },
+  "report-out": { arity: "one" },
 };
 
 export async function main(argv: string[]): Promise<number> {
@@ -191,6 +194,18 @@ async function cmdCompare(argv: string[]): Promise<number> {
   if (!scenario) {
     throw new CliError(compareUsage());
   }
+  // Validate report flags before any paid run, not after.
+  const report = args.one("report");
+  const reportOut = args.one("report-out");
+  if (report !== undefined && report !== "ndjson") {
+    throw new CliError('--report supports only "ndjson"');
+  }
+  if (report === "ndjson" && !reportOut) {
+    throw new CliError("--report ndjson requires --report-out <file>");
+  }
+  if (reportOut && report === undefined) {
+    throw new CliError("--report-out requires --report ndjson");
+  }
 
   const overrides: CompareOverrides = {
     agent: args.one("agent"),
@@ -224,6 +239,13 @@ async function cmdCompare(argv: string[]): Promise<number> {
     },
     onProgress: (message) => console.error(`[promptdiff] ${message}`),
   });
+
+  // History is appended before the exit code is decided — failed comparisons
+  // belong in the record just as much as passing ones.
+  if (report === "ndjson" && reportOut) {
+    const count = appendNdjsonReport(reportOut, summary);
+    console.error(`[promptdiff] appended ${count} record(s) to ${reportOut}`);
+  }
 
   console.log(formatCompareSummary(summary));
   return summary.failedAssertions.length > 0 ? 1 : 0;
@@ -347,6 +369,12 @@ function compareUsage(): string {
     "           --baseline-runner <r> --proposed-runner <r>",
     "           --mode <text|artifact> --tools <tools|default|''>",
     "           --timeout-ms <ms> --max-budget-usd <usd>",
+    "           --report ndjson --report-out <file>",
+    "",
+    "report:",
+    "  --report ndjson appends one record per scenario to --report-out: arms,",
+    "  pass rates, cost, sampling p, prompt hashes, productionModel. Append-only",
+    "  history that answers \"has this drifted since July?\" without hand notes.",
     "",
     "model comparison:",
     "  hold the skills constant and vary the model per arm. A top-level \"skills\"",

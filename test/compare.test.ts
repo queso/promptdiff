@@ -74,6 +74,10 @@ test("runCompare verifies target improvement and regression preservation", async
     expect(summary.totalCostUsd).toBeCloseTo(0.8);
     expect(summary.cases[0]?.baseline.passRate).toBe(0);
     expect(summary.cases[0]?.proposed.passRate).toBe(1);
+    // Arms differ by skill text, so their rendered-prompt hashes must differ.
+    const hashes = summary.cases[0]?.promptSha256;
+    expect(hashes?.baseline).toMatch(/^[0-9a-f]{64}$/);
+    expect(hashes?.baseline).not.toBe(hashes?.proposed);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

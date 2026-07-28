@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { assembleSystemPrompt } from "../prompt";
 import type { Runner, RunnerRunOptions, RunResult } from "../types";
 import type { ArmConfig, CompareConfig, EvalCaseConfig, ScenarioKind } from "./config";
@@ -35,6 +36,8 @@ export interface CaseSummary {
   assertions: string[];
   /** Two-tailed Fisher exact p for the pass/fail table — how easily noise explains the delta. */
   samplingP?: number;
+  /** Hashes of each arm's rendered system prompt — pins a result to exact prompt content. */
+  promptSha256?: { baseline: string; proposed: string };
 }
 
 export interface CompareSummary {
@@ -79,6 +82,7 @@ export async function runCompare(options: CompareRunOptions): Promise<CompareSum
       proposed,
       assertions: evaluateAssertions(evalCase, baseline, proposed),
       samplingP: fisherExactTwoTailedP(baseline.passes, baseline.totalRuns, proposed.passes, proposed.totalRuns),
+      promptSha256: { baseline: sha256(baselineSystem), proposed: sha256(proposedSystem) },
     });
   }
 
@@ -171,6 +175,10 @@ export function formatCompareSummary(summary: CompareSummary): string {
   }
 
   return lines.join("\n");
+}
+
+function sha256(text: string): string {
+  return createHash("sha256").update(text).digest("hex");
 }
 
 const EVIDENCE_TAIL_LINES = 6;
