@@ -181,7 +181,7 @@ test("formatCompareSummary labels arms when models differ and flags mixed-runner
   expect(text).toContain("baseline (sonnet via claude-p): 3/5 pass");
   expect(text).toContain("proposed (llama3.1 via openai): 4/5 pass");
   expect(text).toContain('INFO: no assertion (kind "compare")');
-  expect(text).toContain("note: cost columns are not comparable");
+  expect(text).toContain("note: cost columns may not be comparable");
 
   // Same runner, different models: label with the model only, no cost note.
   const sameRunner: CompareSummary = {

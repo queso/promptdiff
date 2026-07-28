@@ -201,3 +201,59 @@ test("OpenAiCompatRunner retries 429/5xx but fails 4xx immediately", async () =>
   const exhausted = new OpenAiCompatRunner({ baseUrl: "http://x/v1", retries: 1, backoffMs: () => 0, fetchFn: alwaysDown });
   await expect(exhausted.run(baseOptions)).rejects.toThrow(/returned 503.*after 2 attempts/);
 });
+
+test("pricing computes costUsd from usage and enforces maxBudgetUsd", async () => {
+  const usageResponse = () =>
+    new Response(
+      JSON.stringify({
+        model: "m",
+        choices: [{ message: { role: "assistant", content: "ok" } }],
+        usage: { prompt_tokens: 2_000_000, completion_tokens: 1_000_000 },
+      }),
+    );
+
+  const priced = new OpenAiCompatRunner({
+    baseUrl: "http://x/v1",
+    pricing: { input: 0.15, output: 0.6 },
+    backoffMs: () => 0,
+    fetchFn: (async () => usageResponse()) as unknown as typeof fetch,
+  });
+  // 2M input @ $0.15/M + 1M output @ $0.60/M = $0.90.
+  const result = await priced.run({ ...baseOptions, maxBudgetUsd: 1 });
+  expect(result.costUsd).toBeCloseTo(0.9, 10);
+
+  // Same run against a $0.50 cap: post-hoc enforcement, no retry (the money
+  // is already spent — retrying would spend it again).
+  let calls = 0;
+  const capped = new OpenAiCompatRunner({
+    baseUrl: "http://x/v1",
+    pricing: { input: 0.15, output: 0.6 },
+    backoffMs: () => 0,
+    fetchFn: (async () => {
+      calls += 1;
+      return usageResponse();
+    }) as unknown as typeof fetch,
+  });
+  await expect(capped.run({ ...baseOptions, maxBudgetUsd: 0.5 })).rejects.toThrow(
+    /run cost \$0\.9000 exceeded the \$0\.5 max budget/,
+  );
+  expect(calls).toBe(1);
+
+  // Unpriced stays $0 — true for local servers.
+  const unpriced = new OpenAiCompatRunner({
+    baseUrl: "http://x/v1",
+    backoffMs: () => 0,
+    fetchFn: (async () => usageResponse()) as unknown as typeof fetch,
+  });
+  expect((await unpriced.run(baseOptions)).costUsd).toBe(0);
+});
+
+test("pricing with a usage-less endpoint fails loudly instead of reporting $0", async () => {
+  const noUsage = new OpenAiCompatRunner({
+    baseUrl: "http://x/v1",
+    pricing: { input: 1, output: 1 },
+    backoffMs: () => 0,
+    fetchFn: (async () => new Response(completion("ok").replace(/"usage":[^}]+}/, '"usage":{}'))) as unknown as typeof fetch,
+  });
+  await expect(noUsage.run(baseOptions)).rejects.toThrow(/returned no usage\.prompt_tokens/);
+});

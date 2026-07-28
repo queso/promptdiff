@@ -2,6 +2,12 @@ import { readFileSync } from "node:fs";
 import { extname } from "node:path";
 import type { RunResult, Runner, RunnerRunOptions } from "../types";
 
+/** USD per million input/output tokens for one model. */
+export interface ModelPricing {
+  input: number;
+  output: number;
+}
+
 export interface OpenAiCompatRunnerConfig {
   /** Defaults to $OPENAI_BASE_URL, then https://api.openai.com/v1. */
   baseUrl?: string;
@@ -11,6 +17,11 @@ export interface OpenAiCompatRunnerConfig {
   retries?: number;
   /** Backoff before retry attempt N (1-based); injectable for tests. */
   backoffMs?: (attempt: number) => number;
+  /**
+   * Prices responses from usage tokens and makes maxBudgetUsd enforce.
+   * Unset, cost reports 0 — true for local servers, decorative for paid ones.
+   */
+  pricing?: ModelPricing;
   fetchFn?: typeof fetch;
 }
 
@@ -89,6 +100,7 @@ export class OpenAiCompatRunner implements Runner {
   private readonly apiKey: string | undefined;
   private readonly retries: number;
   private readonly backoffMs: (attempt: number) => number;
+  private readonly pricing: ModelPricing | undefined;
   private readonly fetchFn: typeof fetch;
 
   constructor(config: OpenAiCompatRunnerConfig = {}) {
@@ -96,6 +108,7 @@ export class OpenAiCompatRunner implements Runner {
     this.apiKey = config.apiKey ?? process.env.OPENAI_API_KEY;
     this.retries = config.retries ?? 2;
     this.backoffMs = config.backoffMs ?? ((attempt) => Math.min(4_000, 500 * 2 ** (attempt - 1)));
+    this.pricing = config.pricing;
     this.fetchFn = config.fetchFn ?? fetch;
   }
 
@@ -159,11 +172,25 @@ export class OpenAiCompatRunner implements Runner {
       throw new Error(`${url} returned invalid JSON: ${body.slice(0, 1_500)}`);
     }
 
-    return normalizeChatCompletion(parsed, options.model, Date.now() - started);
+    const run = normalizeChatCompletion(parsed, options.model, Date.now() - started, this.pricing);
+    // A single completion can't be aborted mid-request, so the cap enforces
+    // post-hoc, like claude-p's between-turns check. Not a TransientError:
+    // retrying an over-budget run would spend the overage again.
+    if (this.pricing && run.costUsd > options.maxBudgetUsd) {
+      throw new Error(
+        `run cost $${run.costUsd.toFixed(4)} exceeded the $${options.maxBudgetUsd} max budget — raise maxBudgetUsd or cap max_tokens via requestParams`,
+      );
+    }
+    return run;
   }
 }
 
-function normalizeChatCompletion(result: ChatCompletion, requestedModel: string, durationMs: number): RunResult {
+function normalizeChatCompletion(
+  result: ChatCompletion,
+  requestedModel: string,
+  durationMs: number,
+  pricing: ModelPricing | undefined,
+): RunResult {
   const choice = Array.isArray(result.choices) ? result.choices[0] : undefined;
   const message = isRecord(choice) && isRecord(choice.message) ? choice.message : undefined;
   const content = message?.content;
@@ -173,13 +200,27 @@ function normalizeChatCompletion(result: ChatCompletion, requestedModel: string,
 
   return {
     output: content,
-    // OpenAI-compatible endpoints report tokens, not USD; usage stays in `raw`.
-    costUsd: 0,
+    costUsd: computeCostUsd(result.usage, pricing),
     turns: 1,
     durationMs,
     models: [typeof result.model === "string" ? result.model : requestedModel],
     raw: result,
   };
+}
+
+function computeCostUsd(usage: unknown, pricing: ModelPricing | undefined): number {
+  // Unpriced endpoints report 0 — true for local servers; usage stays in raw.
+  if (!pricing) return 0;
+  const promptTokens = isRecord(usage) ? usage.prompt_tokens : undefined;
+  const completionTokens = isRecord(usage) ? usage.completion_tokens : undefined;
+  if (typeof promptTokens !== "number" || typeof completionTokens !== "number") {
+    // Silent $0 with pricing configured is exactly the decorative-budget bug;
+    // an endpoint that won't report usage cannot be budget-enforced.
+    throw new Error(
+      `pricing is configured but the endpoint returned no usage.prompt_tokens/completion_tokens: ${JSON.stringify(usage).slice(0, 300)}`,
+    );
+  }
+  return (promptTokens * pricing.input + completionTokens * pricing.output) / 1_000_000;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

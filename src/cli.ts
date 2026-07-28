@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 import { CliError, parseArgs, type FlagSpecs } from "./args";
-import { loadCompareConfig, type ArmConfig, type CompareOverrides } from "./engine/config";
+import { loadCompareConfig, type ArmConfig, type CompareConfig, type CompareOverrides } from "./engine/config";
 import { formatCompareSummary, runCompare } from "./engine/compare";
 import { prepareSandbox } from "./engine/sandbox";
 import { installSkills, type Delivery } from "./engine/skill-install";
@@ -8,6 +8,7 @@ import { renderStrict, resolveRenderVars, type RenderVars } from "./engine/rende
 import { appendNdjsonReport } from "./engine/report";
 import { assembleSystemPrompt } from "./prompt";
 import { createRunner, RUNNER_NAMES, type RunnerName } from "./runner";
+import type { ModelPricing } from "./runner/openai-compat";
 import type { RunMode, Runner, RunnerRunOptions } from "./types";
 
 const DEFAULT_TIMEOUT_MS = 600_000;
@@ -24,6 +25,7 @@ const runSpecs: FlagSpecs = {
   "prompt-file": { arity: "one" },
   image: { arity: "one", repeat: true },
   var: { arity: "one", repeat: true },
+  price: { arity: "one" },
   mode: { arity: "one" },
   sandbox: { arity: "one" },
   seed: { arity: "one" },
@@ -118,7 +120,7 @@ async function cmdRun(argv: string[]): Promise<void> {
   if (delivery === "install" && tools === "") {
     throw new CliError('--delivery install needs tools enabled: skills trigger via the Skill tool, so --tools "" can never fire them');
   }
-  const runner = runnerFromArgs(args.one("runner"), args.one("base-url"));
+  const runner = runnerFromArgs(args.one("runner"), args.one("base-url"), args.one("price"));
   if (delivery === "install" && !runner.capabilities.skillRegistry) {
     throw new CliError(`--delivery install needs a runner with a skill registry; runner "${runner.name}" has none (use claude-p)`);
   }
@@ -234,8 +236,8 @@ async function cmdCompare(argv: string[]): Promise<number> {
   const summary = await runCompare({
     config,
     runners: {
-      baseline: armRunner(config.arms.baseline, config.retries),
-      proposed: armRunner(config.arms.proposed, config.retries),
+      baseline: armRunner(config.arms.baseline, config),
+      proposed: armRunner(config.arms.proposed, config),
     },
     onProgress: (message) => console.error(`[promptdiff] ${message}`),
   });
@@ -294,12 +296,29 @@ function runnerNameFromString(value: string | undefined): RunnerName {
   throw new CliError(`--runner must be one of: ${RUNNER_NAMES.join(", ")}`);
 }
 
-function runnerFromArgs(name: string | undefined, baseUrl: string | undefined): Runner {
-  return createRunner(name === undefined ? "claude-p" : runnerNameFromString(name), { baseUrl });
+function runnerFromArgs(name: string | undefined, baseUrl: string | undefined, price: string | undefined): Runner {
+  const runnerName = name === undefined ? "claude-p" : runnerNameFromString(name);
+  if (price !== undefined && runnerName !== "openai") {
+    throw new CliError("--price applies to the openai runner; claude-p prices itself");
+  }
+  return createRunner(runnerName, { baseUrl, pricing: price === undefined ? undefined : priceFromFlag(price) });
 }
 
-function armRunner(arm: ArmConfig, retries: number | undefined): Runner {
-  return createRunner(arm.runner, { baseUrl: arm.baseUrl, retries });
+/** "--price 0.15,0.60" → USD per million input,output tokens. */
+function priceFromFlag(value: string): ModelPricing {
+  const [input, output, extra] = value.split(",").map((part) => Number(part));
+  if (extra !== undefined || !Number.isFinite(input) || !Number.isFinite(output) || input < 0 || output < 0) {
+    throw new CliError(`--price must be <input-usd-per-M>,<output-usd-per-M>: ${value}`);
+  }
+  return { input, output };
+}
+
+function armRunner(arm: ArmConfig, config: CompareConfig): Runner {
+  return createRunner(arm.runner, {
+    baseUrl: arm.baseUrl,
+    retries: config.retries,
+    pricing: config.pricing?.[arm.model],
+  });
 }
 
 function defaultTools(mode: RunMode): string {
@@ -335,7 +354,9 @@ function runUsage(): string {
     "  openai    single chat completion against any OpenAI-compatible endpoint",
     "            (text mode only); --base-url or $OPENAI_BASE_URL picks the server,",
     "            $OPENAI_API_KEY is sent when set; --image attaches image files",
-    "            to the user message for vision models (repeatable)",
+    "            to the user message for vision models (repeatable);",
+    "            --price <in>,<out> (USD per million tokens) prices the run from",
+    "            response usage and makes --max-budget-usd enforce",
     "",
     "modes:",
     "  text      disables tools with --tools '' and grades only the final output manually",
@@ -396,6 +417,12 @@ function compareUsage(): string {
     "  a scenario may set \"images\": [\"photo.jpg\", ...] (paths relative to the",
     "  scenario file) to attach images to the user message — openai runner +",
     "  vision model only",
+    "",
+    "pricing:",
+    "  top-level \"pricing\": { \"gpt-4o-mini\": { \"input\": 0.15, \"output\": 0.60 } }",
+    "  (USD per million tokens) prices openai arms from response usage, so cost",
+    "  columns are real and maxBudgetUsd enforces. Unpriced openai arms report $0",
+    "  (true for local servers). claude-p arms price themselves.",
     "",
     "templates:",
     "  top-level \"render\": { \"vars\": { \"draft\": \"./fixtures/a.md\" } } binds",
