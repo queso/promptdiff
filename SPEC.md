@@ -242,6 +242,18 @@ capabilities; it never imports provider SDKs or provider-specific code.
 `src/runner/index.ts` is the registry that maps runner names to
 implementations.
 
+Baseline arms are usually frozen by construction, so `compare --cache`
+(opt-in; results under `--cache-dir`, default `.promptdiff/cache`) reuses
+recorded baseline-arm results instead of re-paying for them on every
+iteration of the proposed prompt. `src/engine/cache.ts` keys each case on a
+sha256 over everything that could change the outcome — rendered baseline
+system prompt, scenario prompt, baseline model/runner/baseUrl, run count,
+tools/mode/delivery, grader spec, image contents, and a deterministic tree
+hash of the sandbox seed (plus the baseline skill trees under install
+delivery, where skill text never enters the system prompt). Hits are real
+recorded ArmSummaries, marked `(cached)` on the summary; the proposed arm
+always runs fresh. Deleting the cache directory busts it.
+
 ## 8. Current Limitations
 
 - Pass-rate assertions are intentionally simple. They are good enough to catch

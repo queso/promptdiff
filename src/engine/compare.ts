@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { assembleSystemPrompt } from "../prompt";
 import type { Runner, RunnerRunOptions, RunResult } from "../types";
+import { buildCacheKey, loadCachedArm, storeCachedArm } from "./cache";
 import type { ArmConfig, CompareConfig, EvalCaseConfig, ScenarioKind } from "./config";
 import { renderStrict, type RenderVars } from "./render";
 import { fisherExactTwoTailedP } from "./stats";
@@ -26,6 +27,8 @@ export interface ArmSummary {
   passRate: number;
   totalCostUsd: number;
   runs: ArmRunSummary[];
+  /** True when this summary was served from the baseline cache instead of fresh runs. */
+  cached?: boolean;
 }
 
 export interface CaseSummary {
@@ -53,10 +56,12 @@ export interface CompareRunOptions {
   config: CompareConfig;
   runners: { baseline: Runner; proposed: Runner };
   onProgress?: (message: string) => void;
+  /** Opt-in baseline-arm result cache; hits skip the baseline runs entirely. */
+  cache?: { dir: string };
 }
 
 export async function runCompare(options: CompareRunOptions): Promise<CompareSummary> {
-  const { config, runners, onProgress } = options;
+  const { config, runners, onProgress, cache } = options;
   // Validate each arm against its own runner — a mixed comparison fails on the
   // violating arm before either arm's paid runs.
   validateRunnerSupport(config, runners.baseline);
@@ -73,7 +78,7 @@ export async function runCompare(options: CompareRunOptions): Promise<CompareSum
 
   for (const { evalCase, baselineSystem, proposedSystem } of renderedCases) {
     onProgress?.(`scenario ${evalCase.name} (${evalCase.kind})`);
-    const baseline = await runArm(config, evalCase, "baseline", baselineSystem, runners.baseline, onProgress);
+    const baseline = await runBaselineArm(config, evalCase, baselineSystem, runners.baseline, cache, onProgress);
     const proposed = await runArm(config, evalCase, "proposed", proposedSystem, runners.proposed, onProgress);
     cases.push({
       name: evalCase.name,
@@ -115,7 +120,7 @@ export function formatCompareSummary(summary: CompareSummary): string {
     lines.push(
       "",
       `${caseSummary.name} (${caseSummary.kind})`,
-      `  ${baselineLabel}: ${caseSummary.baseline.passes}/${caseSummary.baseline.totalRuns} pass (${formatPct(caseSummary.baseline.passRate)}) | $${caseSummary.baseline.totalCostUsd.toFixed(4)}`,
+      `  ${baselineLabel}: ${caseSummary.baseline.passes}/${caseSummary.baseline.totalRuns} pass (${formatPct(caseSummary.baseline.passRate)}) | $${caseSummary.baseline.totalCostUsd.toFixed(4)}${caseSummary.baseline.cached ? " (cached)" : ""}`,
       `  ${proposedLabel}: ${caseSummary.proposed.passes}/${caseSummary.proposed.totalRuns} pass (${formatPct(caseSummary.proposed.passRate)}) | $${caseSummary.proposed.totalCostUsd.toFixed(4)}`,
       `  delta: ${deltaPass >= 0 ? "+" : ""}${formatPct(deltaPass)} pass | ${deltaCost >= 0 ? "+" : ""}$${deltaCost.toFixed(4)}`,
     );
@@ -352,6 +357,45 @@ function mergedRenderVars(config: CompareConfig, evalCase: EvalCaseConfig): Rend
   return { ...config.renderVars, ...evalCase.renderVars };
 }
 
+/**
+ * Baseline runs through the opt-in cache when one is configured: a hit reuses
+ * the recorded ArmSummary (real graded runs, just not re-paid), a miss runs
+ * normally and records the result. Cache mechanics stay out of runArm.
+ */
+async function runBaselineArm(
+  config: CompareConfig,
+  evalCase: EvalCaseConfig,
+  systemPrompt: string,
+  runner: Runner,
+  cache: { dir: string } | undefined,
+  onProgress?: (message: string) => void,
+): Promise<ArmSummary> {
+  if (cache === undefined) {
+    return runArm(config, evalCase, "baseline", systemPrompt, runner, onProgress);
+  }
+  const key = buildCacheKey({
+    systemPrompt,
+    casePrompt: evalCase.prompt,
+    arm: config.arms.baseline,
+    runs: evalCase.runs ?? config.runs,
+    tools: effectiveTools(config, evalCase),
+    mode: effectiveMode(config, evalCase),
+    delivery: config.delivery,
+    grader: evalCase.grader,
+    images: evalCase.images,
+    seedDir: evalCase.seed ?? config.sandboxSeed,
+    baselineSkills: config.baselineSkills,
+  });
+  const hit = loadCachedArm(cache.dir, key);
+  if (hit !== undefined) {
+    onProgress?.(`  baseline: cache hit (${key.slice(0, 12)})`);
+    return { ...hit, cached: true };
+  }
+  const summary = await runArm(config, evalCase, "baseline", systemPrompt, runner, onProgress);
+  storeCachedArm(cache.dir, key, summary);
+  return summary;
+}
+
 async function runArm(
   config: CompareConfig,
   evalCase: EvalCaseConfig,
@@ -427,11 +471,14 @@ function buildRunnerOptions(
 }
 
 function effectiveTools(config: CompareConfig, evalCase: EvalCaseConfig): string {
-  const mode = evalCase.mode ?? config.mode ?? inferMode(evalCase);
   // Install delivery always needs tools (the Skill tool does the triggering),
   // even when the grader is text-only and inline delivery would disable them.
-  const fallbackTools = config.delivery === "install" ? "default" : defaultTools(mode);
+  const fallbackTools = config.delivery === "install" ? "default" : defaultTools(effectiveMode(config, evalCase));
   return evalCase.tools ?? config.tools ?? fallbackTools;
+}
+
+function effectiveMode(config: CompareConfig, evalCase: EvalCaseConfig): "text" | "artifact" {
+  return evalCase.mode ?? config.mode ?? inferMode(evalCase);
 }
 
 function toArmRunSummary(
