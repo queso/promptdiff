@@ -1,6 +1,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import type { GraderSpec } from "./grader";
+import { parseAssertion } from "./json-assert";
 import { resolveRenderVars, type RenderVars } from "./render";
 import { deliveryValue, type Delivery } from "./skill-install";
 import { runnerNameValue, type RunnerName } from "../runner";
@@ -360,6 +361,22 @@ function graderValue(value: unknown, scenarioName: string): GraderSpec {
       regex,
     };
   }
+  if (value.type === "json") {
+    const assert = stringArray(value.assert, `${scenarioName}.grader.assert`);
+    if (assert.length === 0) {
+      throw new Error(`${scenarioName}.grader.assert must list at least one assertion`);
+    }
+    for (const assertion of assert) {
+      try {
+        parseAssertion(assertion);
+      } catch (error) {
+        const reason = error instanceof Error ? error.message : String(error);
+        // Validate up front — a bad assertion must fail here, not after a paid run.
+        throw new Error(`${scenarioName}.grader.assert ${JSON.stringify(assertion)} is invalid: ${reason}`);
+      }
+    }
+    return { type: "json", assert };
+  }
   if (value.type === "command") {
     return {
       type: "command",
@@ -369,7 +386,7 @@ function graderValue(value: unknown, scenarioName: string): GraderSpec {
       expectExitCode: optionalNumber(value.expectExitCode, `${scenarioName}.grader.expectExitCode`),
     };
   }
-  throw new Error(`${scenarioName}.grader.type must be "text" or "command"`);
+  throw new Error(`${scenarioName}.grader.type must be "text", "json", or "command"`);
 }
 
 function kindValue(value: unknown, fallback: ScenarioKind): ScenarioKind {

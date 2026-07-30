@@ -1,6 +1,7 @@
 import { existsSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import type { RunResult } from "../types";
+import { evaluateAssertion, extractLastJson, parseAssertion } from "./json-assert";
 
 export type GraderSpec =
   | {
@@ -8,6 +9,11 @@ export type GraderSpec =
       contains?: string[];
       notContains?: string[];
       regex?: string[];
+    }
+  | {
+      type: "json";
+      /** Path assertions over the run's last balanced JSON value; all must hold. */
+      assert: string[];
     }
   | {
       type: "command";
@@ -32,6 +38,9 @@ export interface GradeResult {
 export async function gradeRun(spec: GraderSpec, input: GradeInput): Promise<GradeResult> {
   if (spec.type === "text") {
     return gradeText(spec, input.run.output);
+  }
+  if (spec.type === "json") {
+    return gradeJson(spec, input.run.output);
   }
   // Command graders judge sandbox files — but for completion-style runs the model's
   // text IS the artifact, so it lands in the sandbox too ($PROMPTDIFF_OUTPUT_FILE).
@@ -60,6 +69,21 @@ function gradeText(spec: Extract<GraderSpec, { type: "text" }>, output: string):
   }
 
   return { pass: true, message: "text grader passed" };
+}
+
+function gradeJson(spec: Extract<GraderSpec, { type: "json" }>, output: string): GradeResult {
+  const extracted = extractLastJson(output);
+  if (extracted === undefined) {
+    return { pass: false, message: "no JSON value found in output" };
+  }
+  for (const source of spec.assert) {
+    // Assertion grammar was validated at config load; parsing here cannot throw.
+    const failure = evaluateAssertion(parseAssertion(source), extracted.value);
+    if (failure !== undefined) {
+      return { pass: false, message: failure };
+    }
+  }
+  return { pass: true, message: "json grader passed" };
 }
 
 async function gradeCommand(

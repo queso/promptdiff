@@ -214,7 +214,15 @@ copies skill files verbatim.
 
 Prefer deterministic graders over LLM judges.
 
-Text graders inspect the run's final output. Command graders run inside the
+Text graders inspect the run's final output. JSON graders parse that output —
+the last balanced JSON value when prose surrounds it, since reasoning models
+narrate around their answer — and check `assert` path assertions of the form
+`<path> <op> <literal>` (ops `==` `!=` `>` `>=` `<` `<=` `contains`; `[*]` is
+existential: any element may satisfy the assertion, including for `!=`).
+Assertion grammar is validated at config load, before any paid run; missing
+paths and type mismatches at grade time fail the assertion with a message,
+never throw. Like text graders, json graders demand no sandbox tools and work
+on every runner. Command graders run inside the
 sandbox after the model invocation and check the exit code of a local command
 such as `bun test`, `go test ./...`, or a fixture-specific script. The final
 output is also written into the sandbox and exposed to command graders as
