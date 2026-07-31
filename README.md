@@ -3,12 +3,15 @@
 `promptdiff` is a small Bun CLI for testing whether an LLM prompt or skill
 change actually changes behavior — with any model, not just Claude.
 
-It has two commands:
+It has four commands:
 
 - `run`: one bounded model invocation with an agent file and optional inlined
   skill files.
 - `compare`: N-run baseline-vs-proposed comparison from a JSON scenario file,
-  with deterministic text or command graders.
+  with deterministic text or command graders (plus calibrated LLM judges).
+- `measure`: N-run single-arm characterization — pass rates, no assertions.
+- `calibrate`: prove a judge grader against labeled rubric fixtures before
+  compare/measure will let it grade anything.
 
 Model access goes through pluggable runners. Two ship today:
 
@@ -562,7 +565,8 @@ Command grader:
 
 Command graders run inside the per-run sandbox. Typically they grade files
 the agent wrote there, which needs a tool-capable runner (claude-p); text
-graders work with every runner.
+graders work with every runner. For semantic judgments neither can express,
+see [Judge graders (calibrated)](#judge-graders-calibrated) below.
 
 Every command grader also receives the run's final output, written into the
 sandbox and exposed as `$PROMPTDIFF_OUTPUT_FILE`. That means completion-style
@@ -581,6 +585,71 @@ scenario so no tools are demanded, and script against the file:
   }
 }
 ```
+
+## Judge graders (calibrated)
+
+Some judgments cannot be expressed as string checks — "is this the
+negate-then-restate construction?" is a semantic call, and regex attempts
+both under- and over-catch it. The `judge` grader has an LLM grade the run's
+output against a markdown rubric:
+
+```json
+{
+  "type": "judge",
+  "rubric": "./rubrics/negate-restate.md",
+  "model": "haiku",
+  "runner": "claude-p",
+  "minAccuracy": 0.9
+}
+```
+
+The rubric file becomes the judge's system prompt verbatim (plus a fixed
+harness instruction demanding a single JSON verdict), and the graded output
+becomes the user prompt. `model` is required and deliberately never defaults
+to the arm's model — a model grading its own output is the bias judges exist
+to avoid. `runner` defaults to `claude-p`; `baseUrl` targets the openai
+runner at any OpenAI-compatible endpoint (judges there are pinned to
+temperature 0).
+
+**Calibration is mandatory.** An uncalibrated judge is worse than the regex
+it replaces: same wrongness, more confidence, higher cost. So every rubric
+ships with labeled fixtures in a sibling directory:
+
+```text
+rubrics/negate-restate.md
+rubrics/negate-restate.fixtures/
+  pass/   outputs the judge must call clean
+  fail/   outputs the judge must flag
+```
+
+Run the calibration before trusting the judge:
+
+```bash
+promptdiff calibrate --rubric rubrics/negate-restate.md --model haiku
+```
+
+This judges every fixture, prints per-class accuracy plus each miss, and
+writes `rubrics/negate-restate.md.calibration.json` next to the rubric —
+commit it; it is the judge's proof of competence, keyed to the rubric's
+content hash. Calibrate always exits 0: it measures, the gate enforces.
+
+**The gate.** At compare/measure startup — before any paid run — every judge
+grader must have a calibration record that exists, matches the current
+rubric content (editing the rubric stales the record) and the spec's
+model/runner, and clears `minAccuracy` (default 0.9) on **both** classes.
+Per-class bars on purpose: a judge that passes everything scores 100% on the
+pass class and 0% on the fail class — overall accuracy would hide it. Any
+violation refuses the whole run and names the fix.
+
+Judge verdicts are strict: the last balanced JSON object in the judge's
+reply wins (reasoning models add prose), and a reply with no valid verdict
+**fails** the graded run — a judge problem never silently counts as a pass.
+
+Cost note: a judge grader adds one billed model call per graded run; that
+cost is added into the run's cost so summary totals stay honest. v1 judges
+are absolute (one output vs the rubric); pairwise comparison is deferred —
+a rubric whose absolute judge cannot clear the calibration bar is the signal
+to escalate.
 
 ## Designing good fixtures
 

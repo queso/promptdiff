@@ -1,4 +1,5 @@
 import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import { CliError, parseArgs, type FlagSpecs } from "./args";
 import { loadCompareConfig, type ArmConfig, type CompareConfig, type CompareOverrides } from "./engine/config";
 import { formatCompareSummary, formatMeasureSummary, runCompare, runMeasure } from "./engine/compare";
@@ -7,6 +8,7 @@ import { installSkills, type Delivery } from "./engine/skill-install";
 import { renderStrict, resolveRenderVars, type RenderVars } from "./engine/render";
 import { appendNdjsonReport } from "./engine/report";
 import { buildCompareReceipts, buildMeasureReceipts, writeReceipts } from "./engine/receipt";
+import { formatCalibrationReport, runCalibration } from "./engine/judge";
 import { assembleSystemPrompt } from "./prompt";
 import { createRunner, RUNNER_NAMES, type RunnerName } from "./runner";
 import type { ModelPricing } from "./runner/openai-compat";
@@ -98,6 +100,13 @@ export async function main(argv: string[]): Promise<number> {
           return 0;
         }
         await cmdMeasure(rest);
+        return 0;
+      case "calibrate":
+        if (isHelp(rest)) {
+          console.log(calibrateUsage());
+          return 0;
+        }
+        await cmdCalibrate(rest);
         return 0;
       default:
         throw new CliError(generalUsage());
@@ -261,6 +270,37 @@ async function cmdMeasure(argv: string[]): Promise<void> {
   }
 
   console.log(formatMeasureSummary(summary));
+}
+
+const calibrateSpecs: FlagSpecs = {
+  rubric: { arity: "one" },
+  model: { arity: "one" },
+  runner: { arity: "one" },
+  "base-url": { arity: "one" },
+  "timeout-ms": { arity: "one" },
+  "max-budget-usd": { arity: "one" },
+};
+
+async function cmdCalibrate(argv: string[]): Promise<void> {
+  const args = parseArgs(argv, calibrateSpecs);
+  const rubric = args.one("rubric");
+  const model = args.one("model");
+  if (!rubric || !model) {
+    throw new CliError(calibrateUsage());
+  }
+
+  const result = await runCalibration({
+    rubric: resolve(rubric),
+    model,
+    runner: args.one("runner") ? runnerNameFromString(args.one("runner")) : "claude-p",
+    baseUrl: args.one("base-url"),
+    timeoutMs: args.number("timeout-ms", DEFAULT_TIMEOUT_MS),
+    maxBudgetUsd: args.number("max-budget-usd", DEFAULT_MAX_BUDGET_USD),
+    onProgress: (message) => console.error(`[promptdiff] ${message}`),
+  });
+
+  // Always exit 0: calibrate measures, the compare/measure gate enforces.
+  console.log(formatCalibrationReport(result));
 }
 
 async function cmdCompare(argv: string[]): Promise<number> {
@@ -516,6 +556,12 @@ function compareUsage(): string {
     "           works with every runner)",
     "  command  runs a shell command inside the per-run sandbox and checks exit code",
     "           (needs a tool-capable runner: claude-p)",
+    "  judge    an explicit judge model grades the final output against a markdown",
+    "           rubric: { \"type\": \"judge\", \"rubric\": \"./rubrics/r.md\", \"model\": <m>,",
+    "           \"runner\": <claude-p|openai>, \"baseUrl\"?, \"minAccuracy\"? (default 0.9) }.",
+    "           Refuses to grade until `promptdiff calibrate` has proven the judge",
+    "           against labeled fixtures (see `promptdiff calibrate --help`). Adds",
+    "           one billed model call per graded run.",
     "",
     "images:",
     "  a scenario may set \"images\": [\"photo.jpg\", ...] (paths relative to the",
@@ -586,14 +632,45 @@ function measureUsage(): string {
   ].join("\n");
 }
 
+function calibrateUsage(): string {
+  return [
+    "usage: promptdiff calibrate --rubric <rubric.md> --model <judge-model> [flags]",
+    "",
+    "Measures a judge (rubric + model + runner) against labeled fixtures and",
+    "writes <rubric>.calibration.json next to the rubric. compare/measure refuse",
+    "to use a judge grader until this record exists, matches the current rubric",
+    "content (sha256) and judge model/runner, and clears minAccuracy on BOTH",
+    "classes — an uncalibrated judge is worse than the regex it replaces: same",
+    "wrongness, more confidence, higher cost.",
+    "",
+    "flags: --runner <claude-p|openai> --base-url <url>",
+    "       --timeout-ms <ms> --max-budget-usd <usd>",
+    "",
+    "fixtures (sibling directory named after the rubric):",
+    "  rubrics/negate-restate.md",
+    "  rubrics/negate-restate.fixtures/pass/*.md   outputs the judge must call clean",
+    "  rubrics/negate-restate.fixtures/fail/*.md   outputs the judge must flag",
+    "",
+    "Both classes need at least one fixture. Accuracy is reported per class on",
+    "purpose: a judge that passes everything scores 100% on the pass class and",
+    "0% on the fail class — overall accuracy would hide it.",
+    "",
+    "Exit code is 0 whenever the fixtures were judged — even a failing",
+    "calibration is recorded; the compare/measure gate is what enforces the bar.",
+    "Editing the rubric invalidates the record (content hash); recalibrate after",
+    "every rubric change.",
+  ].join("\n");
+}
+
 function generalUsage(): string {
   return [
-    "usage: promptdiff <run|compare|measure> [flags]",
+    "usage: promptdiff <run|compare|measure|calibrate> [flags]",
     "",
     "commands:",
-    "  run      one bounded model invocation with inlined skills",
-    "  compare  N-run baseline-vs-proposed scenario comparison",
-    "  measure  N-run single-arm characterization (pass rates, no assertions)",
+    "  run        one bounded model invocation with inlined skills",
+    "  compare    N-run baseline-vs-proposed scenario comparison",
+    "  measure    N-run single-arm characterization (pass rates, no assertions)",
+    "  calibrate  measure a judge grader against labeled rubric fixtures",
     "",
     "use `promptdiff <command> --help` for command flags",
   ].join("\n");

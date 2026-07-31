@@ -2,6 +2,7 @@ import { existsSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import type { RunResult } from "../types";
 import { evaluateAssertion, extractLastJson, parseAssertion } from "./json-assert";
+import { gradeWithJudge, type JudgeGraderSpec } from "./judge";
 
 export type GraderSpec =
   | {
@@ -21,11 +22,15 @@ export type GraderSpec =
       cwd?: string;
       timeoutMs?: number;
       expectExitCode?: number;
-    };
+    }
+  | JudgeGraderSpec;
 
 export interface GradeInput {
   run: RunResult;
   sandboxDir: string;
+  /** Bounds for graders that bill a model call (judge); deterministic graders ignore them. */
+  timeoutMs?: number;
+  maxBudgetUsd?: number;
 }
 
 export interface GradeResult {
@@ -33,7 +38,12 @@ export interface GradeResult {
   message: string;
   stdout?: string;
   stderr?: string;
+  /** USD billed by the grader itself (judge graders); unset for deterministic graders. */
+  costUsd?: number;
 }
+
+const DEFAULT_JUDGE_TIMEOUT_MS = 600_000;
+const DEFAULT_JUDGE_BUDGET_USD = 1;
 
 export async function gradeRun(spec: GraderSpec, input: GradeInput): Promise<GradeResult> {
   if (spec.type === "text") {
@@ -41,6 +51,13 @@ export async function gradeRun(spec: GraderSpec, input: GradeInput): Promise<Gra
   }
   if (spec.type === "json") {
     return gradeJson(spec, input.run.output);
+  }
+  if (spec.type === "judge") {
+    return gradeWithJudge(spec, input.run.output, {
+      cwd: input.sandboxDir,
+      timeoutMs: input.timeoutMs ?? DEFAULT_JUDGE_TIMEOUT_MS,
+      maxBudgetUsd: input.maxBudgetUsd ?? DEFAULT_JUDGE_BUDGET_USD,
+    });
   }
   // Command graders judge sandbox files — but for completion-style runs the model's
   // text IS the artifact, so it lands in the sandbox too ($PROMPTDIFF_OUTPUT_FILE).
