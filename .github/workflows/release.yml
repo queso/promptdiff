@@ -34,7 +34,11 @@ jobs:
         run: npm publish --provenance --access public
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-      - name: Create GitHub release
-        run: gh release create "$GITHUB_REF_NAME" --generate-notes --verify-tag
+      # release-please normally creates the GitHub release; this covers
+      # manually pushed tags (like the initial v1.0.0) without duplicating.
+      - name: Create GitHub release if missing
+        run: |
+          gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1 \
+            || gh release create "$GITHUB_REF_NAME" --generate-notes --verify-tag
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
