@@ -37,8 +37,13 @@ each output deterministically, and reports pass rates and cost.
 
 ## Install
 
-The npm package (`@the-ai-team/promptdiff`) is coming soon. Until then,
-install from a checkout:
+```bash
+bun add -g @the-ai-team/promptdiff
+# or
+npm install -g @the-ai-team/promptdiff
+```
+
+Or from a checkout:
 
 ```bash
 git clone https://github.com/queso/promptdiff

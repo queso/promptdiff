@@ -1,0 +1,24 @@
+name: Release Please
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  release-please:
+    runs-on: ubuntu-latest
+    steps:
+      # Parses conventional commits on main (feat -> minor, fix -> patch,
+      # feat!/BREAKING CHANGE -> major), maintains a Release PR carrying the
+      # version bump + CHANGELOG entry, and cuts the vX.Y.Z tag + GitHub
+      # Release when that PR merges. The PAT matters: PRs and tags created
+      # with the default GITHUB_TOKEN do not trigger other workflows, so
+      # without it the Release PR gets no CI (the ruleset then blocks it)
+      # and the tag would not trigger the npm publish workflow.
+      - uses: googleapis/release-please-action@v4
+        with:
+          token: ${{ secrets.RELEASE_PLEASE_TOKEN || secrets.GITHUB_TOKEN }}

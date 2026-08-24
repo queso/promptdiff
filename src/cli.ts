@@ -81,6 +81,9 @@ export async function main(argv: string[]): Promise<number> {
       case "help":
         console.log(generalUsage());
         return command === undefined ? 2 : 0;
+      case "--version":
+        console.log(packageVersion());
+        return 0;
       case "run":
         if (isHelp(rest)) {
           console.log(runUsage());
@@ -123,6 +126,11 @@ export async function main(argv: string[]): Promise<number> {
 
 function isHelp(argv: string[]): boolean {
   return argv.length === 1 && (argv[0] === "--help" || argv[0] === "-h");
+}
+
+function packageVersion(): string {
+  const pkg = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8")) as { version: string };
+  return pkg.version;
 }
 
 async function cmdRun(argv: string[]): Promise<void> {

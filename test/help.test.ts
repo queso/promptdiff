@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { expect, test } from "bun:test";
 
 test("compare help documents runs, graders, and assertions", () => {
@@ -32,4 +33,15 @@ test("calibrate help documents fixtures, the per-class bar, and the gate", () =>
   expect(stdout).toContain(".fixtures/fail/*.md");
   expect(stdout).toContain("per class");
   expect(stdout).toContain("the compare/measure gate is what enforces the bar");
+});
+
+test("--version prints the package version", () => {
+  const result = Bun.spawnSync(["./promptdiff", "--version"], {
+    cwd: process.cwd(),
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  expect(result.exitCode).toBe(0);
+  const pkg = JSON.parse(readFileSync("package.json", "utf8")) as { version: string };
+  expect(result.stdout.toString().trim()).toBe(pkg.version);
 });
