@@ -38,9 +38,9 @@ each output deterministically, and reports pass rates and cost.
 ## Install
 
 ```bash
-bun add -g @the-ai-team/promptdiff
+bun add -g @theaiteam/promptdiff
 # or
-npm install -g @the-ai-team/promptdiff
+npm install -g @theaiteam/promptdiff
 ```
 
 Or from a checkout:
