@@ -30,10 +30,23 @@ jobs:
         with:
           node-version: 22
           registry-url: https://registry.npmjs.org
+      # Trusted publishing (OIDC) needs a current npm; the Node-bundled one
+      # may predate support. The diagnostic line makes the next auth failure
+      # self-explaining: no ACTIONS_ID_TOKEN vars → workflow context problem;
+      # vars present but publish ENEEDAUTHs → npmjs.com trusted-publisher
+      # config mismatch (must be repo queso/promptdiff, workflow release.yml,
+      # matched case-sensitively).
+      - name: Update npm for trusted publishing
+        run: |
+          npm install -g npm@latest
+          echo "node=$(node --version) npm=$(npm --version)"
+          if [ -n "${ACTIONS_ID_TOKEN_REQUEST_URL:-}" ]; then
+            echo "OIDC vars: present"
+          else
+            echo "OIDC vars: MISSING — id-token permission not reaching this job"
+          fi
       - name: Publish to npm
         run: npm publish --provenance --access public
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
       # release-please normally creates the GitHub release; this covers
       # manually pushed tags (like the initial v1.0.0) without duplicating.
       - name: Create GitHub release if missing
