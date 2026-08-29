@@ -58,7 +58,8 @@ claude -p "<fixture work item>" \
   --model <model> \
   --output-format json \
   --tools <tools> \
-  --max-budget-usd <amount>
+  --max-budget-usd <amount> \
+  [--max-turns <n>]
 ```
 
 The spawned process runs with the per-run sandbox as its actual working
@@ -67,6 +68,12 @@ used as a substitute for sandboxing.
 
 The runner captures final output text, `total_cost_usd`, turn count, duration,
 and model usage keys.
+
+A `maxTurns` cap (scenario field, per-case override, or `--max-turns`) is
+passed through as `--max-turns`. A run that stops at the cap (result subtype
+`error_max_turns`, on any exit code) is returned as a normal result flagged
+`exhaustedTurns` — the engine records it and scores it as a failed run
+without invoking the grader, so partial output cannot pass by accident.
 
 ### 3.2 `openai`
 
@@ -183,7 +190,11 @@ each run) recording the content hash of every prompt file tested plus the
 verdict — content addressing instead of hand-maintained prompt_version
 strings, so a consuming repo's CI can require a passing receipt for each
 shipped prompt's current hash. Reports are history; receipts are current
-state.
+state. `--raw-out <dir>` (compare and measure) additionally writes each run's
+full runner result JSON — token usage categories, modelUsage, subtype — one
+file per completed run, for token-level analysis that the digested summaries
+cannot support; files land as runs finish, so a partial invocation still
+leaves its completed records.
 
 `compare` scenarios assert nothing: they exist to report both arms' pass
 rates and the delta, for comparisons (typically model-vs-model) where neither

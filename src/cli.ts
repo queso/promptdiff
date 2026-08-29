@@ -36,6 +36,7 @@ const runSpecs: FlagSpecs = {
   tools: { arity: "one" },
   "timeout-ms": { arity: "one" },
   "max-budget-usd": { arity: "one" },
+  "max-turns": { arity: "one" },
   "keep-sandbox": { arity: "none" },
   "clean-sandbox": { arity: "none" },
 };
@@ -63,10 +64,12 @@ const compareSpecs: FlagSpecs = {
   tools: { arity: "one" },
   "timeout-ms": { arity: "one" },
   "max-budget-usd": { arity: "one" },
+  "max-turns": { arity: "one" },
   "keep-sandbox": { arity: "none" },
   report: { arity: "one" },
   "report-out": { arity: "one" },
   receipts: { arity: "one" },
+  "raw-out": { arity: "one" },
   cache: { arity: "none" },
   "cache-dir": { arity: "one" },
 };
@@ -196,6 +199,7 @@ async function cmdRun(argv: string[]): Promise<void> {
       tools,
       timeoutMs: args.number("timeout-ms", DEFAULT_TIMEOUT_MS),
       maxBudgetUsd: args.number("max-budget-usd", DEFAULT_MAX_BUDGET_USD),
+      maxTurns: maxTurnsFromArgs(args.has("max-turns") ? args.number("max-turns", 0) : undefined),
     };
 
     console.error(
@@ -233,8 +237,10 @@ const measureSpecs: FlagSpecs = {
   tools: { arity: "one" },
   "timeout-ms": { arity: "one" },
   "max-budget-usd": { arity: "one" },
+  "max-turns": { arity: "one" },
   "keep-sandbox": { arity: "none" },
   receipts: { arity: "one" },
+  "raw-out": { arity: "one" },
 };
 
 async function cmdMeasure(argv: string[]): Promise<void> {
@@ -256,6 +262,7 @@ async function cmdMeasure(argv: string[]): Promise<void> {
     runs: args.has("runs") ? args.number("runs", 0) : undefined,
     timeoutMs: args.has("timeout-ms") ? args.number("timeout-ms", DEFAULT_TIMEOUT_MS) : undefined,
     maxBudgetUsd: args.has("max-budget-usd") ? args.number("max-budget-usd", DEFAULT_MAX_BUDGET_USD) : undefined,
+    maxTurns: maxTurnsFromArgs(args.has("max-turns") ? args.number("max-turns", 0) : undefined),
     mode: args.one("mode") ? modeFromString(args.one("mode")) : undefined,
     tools: args.one("tools"),
     addDirs: args.many("add-dir").length ? args.many("add-dir") : undefined,
@@ -264,11 +271,13 @@ async function cmdMeasure(argv: string[]): Promise<void> {
     keepSandbox: args.has("keep-sandbox") ? true : undefined,
   };
 
+  const rawOutDir = args.one("raw-out");
   const config = loadCompareConfig(scenario, overrides, { singleArm: true });
   const summary = await runMeasure({
     config,
     runner: armRunner(config.arms.baseline, config),
     onProgress: (message) => console.error(`[promptdiff] ${message}`),
+    rawOut: rawOutDir === undefined ? undefined : { dir: rawOutDir },
   });
 
   const receiptsDir = args.one("receipts");
@@ -350,6 +359,7 @@ async function cmdCompare(argv: string[]): Promise<number> {
     runs: args.has("runs") ? args.number("runs", 0) : undefined,
     timeoutMs: args.has("timeout-ms") ? args.number("timeout-ms", DEFAULT_TIMEOUT_MS) : undefined,
     maxBudgetUsd: args.has("max-budget-usd") ? args.number("max-budget-usd", DEFAULT_MAX_BUDGET_USD) : undefined,
+    maxTurns: maxTurnsFromArgs(args.has("max-turns") ? args.number("max-turns", 0) : undefined),
     mode: args.one("mode") ? modeFromString(args.one("mode")) : undefined,
     tools: args.one("tools"),
     addDirs: args.many("add-dir").length ? args.many("add-dir") : undefined,
@@ -358,6 +368,7 @@ async function cmdCompare(argv: string[]): Promise<number> {
     keepSandbox: args.has("keep-sandbox") ? true : undefined,
   };
 
+  const rawOutDir = args.one("raw-out");
   const config = loadCompareConfig(scenario, overrides);
   const summary = await runCompare({
     config,
@@ -367,6 +378,7 @@ async function cmdCompare(argv: string[]): Promise<number> {
     },
     onProgress: (message) => console.error(`[promptdiff] ${message}`),
     cache,
+    rawOut: rawOutDir === undefined ? undefined : { dir: rawOutDir },
   });
 
   // History is appended before the exit code is decided — failed comparisons
@@ -393,6 +405,14 @@ function promptFromArgs(prompt: string | undefined, promptFile: string | undefin
   if (prompt) return prompt;
   if (promptFile) return readFileSync(promptFile, "utf8");
   throw new CliError(runUsage());
+}
+
+function maxTurnsFromArgs(value: number | undefined): number | undefined {
+  if (value === undefined) return undefined;
+  if (!Number.isInteger(value) || value < 1) {
+    throw new CliError("--max-turns must be an integer of at least 1");
+  }
+  return value;
 }
 
 function modeFromString(value: string | undefined): RunMode {
@@ -475,6 +495,7 @@ function runUsage(): string {
     "       --runner <claude-p|openai> --base-url <url> --image <file>...",
     "       --var <name=value>... --sandbox <dir> --seed <dir>",
     "       --tools <tools|default|''> --timeout-ms <ms> --max-budget-usd <usd>",
+    "       --max-turns <n> (claude-p: cap agentic turns per run)",
     "",
     "templates:",
     "  --var draft=./fixture.md binds {{draft}} in the agent, skills, and prompt;",
@@ -522,9 +543,20 @@ function compareUsage(): string {
     "           --baseline-model <m> --proposed-model <m>",
     "           --baseline-runner <r> --proposed-runner <r>",
     "           --mode <text|artifact> --tools <tools|default|''>",
-    "           --timeout-ms <ms> --max-budget-usd <usd>",
+    "           --timeout-ms <ms> --max-budget-usd <usd> --max-turns <n>",
     "           --report ndjson --report-out <file>",
-    "           --cache [--cache-dir <dir>]",
+    "           --raw-out <dir> --cache [--cache-dir <dir>]",
+    "",
+    "turn cap:",
+    "  --max-turns <n> (or scenario \"maxTurns\", per-case override allowed) caps",
+    "  agentic turns per run (claude-p). A run that hits the cap is scored as a",
+    "  FAILED run without grading — partial output must not pass by accident.",
+    "",
+    "raw results:",
+    "  --raw-out <dir> writes each run's full runner result JSON (token usage,",
+    "  modelUsage, subtype) as <scenario>_<arm>_<n>.json, one file per completed",
+    "  run — the token-level record that summaries and reports digest away.",
+    "  Cache-served baseline arms ran earlier and write nothing here.",
     "",
     "caching:",
     "  --cache reuses recorded baseline-arm results (default dir .promptdiff/cache)",
@@ -631,10 +663,15 @@ function measureUsage(): string {
     "           --runner <claude-p|openai> --base-url <url> --runs <n>",
     "           --mode <text|artifact> --tools <tools|default|''>",
     "           --sandbox <dir> --seed <dir> --keep-sandbox",
-    "           --timeout-ms <ms> --max-budget-usd <usd> --receipts <dir>",
+    "           --timeout-ms <ms> --max-budget-usd <usd> --max-turns <n>",
+    "           --receipts <dir> --raw-out <dir>",
     "",
     "--receipts <dir> writes one <scenario>.receipt.json per scenario with",
     "per-file prompt hashes and the measured rates (verdict \"measured\").",
+    "",
+    "--max-turns <n> caps agentic turns per run (claude-p); a capped run is",
+    "scored as a failure without grading. --raw-out <dir> writes each run's",
+    "full runner result JSON (token usage included) as <scenario>_measure_<n>.json.",
     "",
     "Exit code is 0 whenever the runs complete — a measurement has no pass/fail.",
   ].join("\n");

@@ -24,6 +24,7 @@ export interface EvalCaseConfig {
   addDirs: string[];
   mode?: RunMode;
   tools?: string;
+  maxTurns?: number;
 }
 
 /** Model/runner/endpoint one arm runs against, resolved from per-arm and shared fields. */
@@ -61,6 +62,8 @@ export interface CompareConfig {
   runs: number;
   timeoutMs: number;
   maxBudgetUsd: number;
+  /** Turn cap per run (claude-p); a run that hits it is scored as a failure, not graded. */
+  maxTurns?: number;
   mode?: RunMode;
   tools?: string;
   addDirs: string[];
@@ -85,6 +88,7 @@ export interface CompareOverrides {
   runs?: number;
   timeoutMs?: number;
   maxBudgetUsd?: number;
+  maxTurns?: number;
   mode?: RunMode;
   tools?: string;
   addDirs?: string[];
@@ -113,6 +117,7 @@ interface RawCompareConfig {
   runs?: unknown;
   timeoutMs?: unknown;
   maxBudgetUsd?: unknown;
+  maxTurns?: unknown;
   mode?: unknown;
   tools?: unknown;
   addDirs?: unknown;
@@ -136,6 +141,7 @@ interface RawCase {
   addDirs?: unknown;
   mode?: unknown;
   tools?: unknown;
+  maxTurns?: unknown;
 }
 
 export interface LoadOptions {
@@ -201,6 +207,7 @@ export function loadCompareConfig(
     runs: overrides.runs ?? numberValue(raw.runs, 5),
     timeoutMs: overrides.timeoutMs ?? numberValue(raw.timeoutMs, 600_000),
     maxBudgetUsd: overrides.maxBudgetUsd ?? numberValue(raw.maxBudgetUsd, 1),
+    maxTurns: overrides.maxTurns ?? optionalNumber(raw.maxTurns, "maxTurns"),
     mode: overrides.mode ?? modeValue(raw.mode, undefined),
     tools: overrides.tools ?? stringValue(raw.tools, undefined),
     addDirs: (overrides.addDirs ?? stringArray(raw.addDirs, "addDirs")).map((dir) => resolveFrom(baseDir, dir)),
@@ -231,6 +238,7 @@ function normalizeCase(baseDir: string, raw: RawCase, index: number): EvalCaseCo
     addDirs: stringArray(raw.addDirs, `${name}.addDirs`).map((dir) => resolveFrom(baseDir, dir)),
     mode: modeValue(raw.mode, undefined),
     tools: stringValue(raw.tools, undefined),
+    maxTurns: optionalNumber(raw.maxTurns, `${name}.maxTurns`),
   };
 }
 
@@ -250,9 +258,15 @@ function validateCompareConfig(config: CompareConfig): void {
   if (config.maxBudgetUsd <= 0) {
     throw new Error("maxBudgetUsd must be positive");
   }
+  if (config.maxTurns !== undefined && (!Number.isInteger(config.maxTurns) || config.maxTurns < 1)) {
+    throw new Error("maxTurns must be an integer of at least 1");
+  }
   for (const evalCase of config.cases) {
     if (evalCase.runs !== undefined && evalCase.runs < 1) {
       throw new Error(`${evalCase.name}.runs must be at least 1`);
+    }
+    if (evalCase.maxTurns !== undefined && (!Number.isInteger(evalCase.maxTurns) || evalCase.maxTurns < 1)) {
+      throw new Error(`${evalCase.name}.maxTurns must be an integer of at least 1`);
     }
     for (const image of evalCase.images) {
       // A missing image must fail at load time, not after the other arm's paid runs.

@@ -1,5 +1,8 @@
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { expect, test } from "bun:test";
-import { buildClaudeArgs, describeClaudeFailure } from "../src/runner/claude-p";
+import { buildClaudeArgs, ClaudePrintRunner, describeClaudeFailure } from "../src/runner/claude-p";
 
 test("buildClaudeArgs uses a system prompt file, budget, tools, and add-dir", () => {
   const args = buildClaudeArgs({
@@ -146,4 +149,90 @@ test("describeClaudeFailure surfaces structured errors and falls back to raw str
   // message was blank in exactly the case that needed diagnosing).
   expect(describeClaudeFailure(2, "not json", "boom", 1)).toBe("claude exited 2: boom");
   expect(describeClaudeFailure(2, "partial output", "", 1)).toBe("claude exited 2: partial output");
+});
+
+test("buildClaudeArgs passes --max-turns only when a cap is set", () => {
+  const base = {
+    systemPrompt: "system",
+    systemPromptFile: "/tmp/system.md",
+    userPrompt: "do work",
+    model: "sonnet",
+    cwd: "/tmp/sandbox",
+    addDirs: [],
+    tools: "",
+    timeoutMs: 1_000,
+    maxBudgetUsd: 0.25,
+  };
+
+  const capped = buildClaudeArgs({ ...base, maxTurns: 25 });
+  const i = capped.indexOf("--max-turns");
+  expect(i).toBeGreaterThan(-1);
+  expect(capped[i + 1]).toBe("25");
+
+  expect(buildClaudeArgs(base)).not.toContain("--max-turns");
+});
+
+// Captured shape of a turn-cap stop: full result JSON on stdout with
+// subtype "error_max_turns" (exit code varies by claude version).
+const MAX_TURNS_STDOUT = JSON.stringify({
+  type: "result",
+  subtype: "error_max_turns",
+  is_error: true,
+  result: "partial answer",
+  num_turns: 25,
+  total_cost_usd: 0.42,
+  duration_ms: 60_000,
+  modelUsage: { "claude-sonnet-5": { costUSD: 0.42 } },
+});
+
+test("a turn-capped run is returned as a measured outcome, not thrown as a crash", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "promptdiff-runner-test-"));
+  try {
+    const bin = join(dir, "fake-claude");
+    writeFileSync(bin, `#!/bin/sh\necho '${MAX_TURNS_STDOUT}'\nexit 1\n`, { mode: 0o755 });
+
+    const runner = new ClaudePrintRunner(bin);
+    const result = await runner.run({
+      systemPrompt: "system",
+      userPrompt: "do work",
+      model: "sonnet",
+      cwd: dir,
+      addDirs: [],
+      tools: "",
+      timeoutMs: 10_000,
+      maxBudgetUsd: 1,
+      maxTurns: 25,
+    });
+
+    expect(result.exhaustedTurns).toBe(true);
+    expect(result.output).toBe("partial answer");
+    expect(result.turns).toBe(25);
+    expect(result.costUsd).toBeCloseTo(0.42);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("non-zero exits without a turn-cap subtype still throw", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "promptdiff-runner-test-"));
+  try {
+    const bin = join(dir, "fake-claude");
+    writeFileSync(bin, `#!/bin/sh\necho boom >&2\nexit 2\n`, { mode: 0o755 });
+
+    const runner = new ClaudePrintRunner(bin);
+    await expect(
+      runner.run({
+        systemPrompt: "system",
+        userPrompt: "do work",
+        model: "sonnet",
+        cwd: dir,
+        addDirs: [],
+        tools: "",
+        timeoutMs: 10_000,
+        maxBudgetUsd: 1,
+      }),
+    ).rejects.toThrow("claude exited 2: boom");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });
