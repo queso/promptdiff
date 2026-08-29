@@ -1,6 +1,6 @@
 {
   "name": "@theaiteam/promptdiff",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "A/B test harness for LLM prompt and skill changes — headless Claude Code or any OpenAI-compatible endpoint.",
   "author": "Josh Owens <josh@theaiteam.dev>",
   "repository": {

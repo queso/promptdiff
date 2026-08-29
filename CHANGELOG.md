@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.1.0](https://github.com/queso/promptdiff/compare/v1.0.0...v1.1.0) (2026-08-29)
+
+
+### Features
+
+* turn caps (--max-turns) and raw per-run results (--raw-out) ([#35](https://github.com/queso/promptdiff/issues/35)) ([e8d0f2c](https://github.com/queso/promptdiff/commit/e8d0f2c4acfa13723b4a96fb99134c4c2df08ad6)), closes [#33](https://github.com/queso/promptdiff/issues/33) [#34](https://github.com/queso/promptdiff/issues/34)
+
 ## 1.0.0 — 2026-07-31
 
 First stable release. promptdiff is a Bun CLI for testing whether an LLM
