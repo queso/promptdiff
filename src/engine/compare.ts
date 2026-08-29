@@ -1,4 +1,6 @@
 import { createHash } from "node:crypto";
+import { mkdirSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
 import { assembleSystemPrompt } from "../prompt";
 import type { Runner, RunnerRunOptions, RunResult } from "../types";
 import { buildCacheKey, loadCachedArm, storeCachedArm } from "./cache";
@@ -59,10 +61,17 @@ export interface CompareRunOptions {
   onProgress?: (message: string) => void;
   /** Opt-in baseline-arm result cache; hits skip the baseline runs entirely. */
   cache?: { dir: string };
+  /**
+   * Opt-in per-run raw persistence: each completed run's full runner result
+   * (token usage included) is written to this directory as it finishes.
+   * Cache-served baseline arms ran in an earlier invocation, so they write
+   * nothing here.
+   */
+  rawOut?: { dir: string };
 }
 
 export async function runCompare(options: CompareRunOptions): Promise<CompareSummary> {
-  const { config, runners, onProgress, cache } = options;
+  const { config, runners, onProgress, cache, rawOut } = options;
   // Validate each arm against its own runner — a mixed comparison fails on the
   // violating arm before either arm's paid runs.
   validateRunnerSupport(config, runners.baseline);
@@ -80,8 +89,8 @@ export async function runCompare(options: CompareRunOptions): Promise<CompareSum
 
   for (const { evalCase, baselineSystem, proposedSystem } of renderedCases) {
     onProgress?.(`scenario ${evalCase.name} (${evalCase.kind})`);
-    const baseline = await runBaselineArm(config, evalCase, baselineSystem, runners.baseline, cache, onProgress);
-    const proposed = await runArm(config, evalCase, "proposed", proposedSystem, runners.proposed, onProgress);
+    const baseline = await runBaselineArm(config, evalCase, baselineSystem, runners.baseline, cache, onProgress, rawOut);
+    const proposed = await runArm(config, evalCase, "proposed", proposedSystem, runners.proposed, onProgress, "proposed", rawOut);
     cases.push({
       name: evalCase.name,
       kind: evalCase.kind,
@@ -277,6 +286,8 @@ export interface MeasureRunOptions {
   config: CompareConfig;
   runner: Runner;
   onProgress?: (message: string) => void;
+  /** Opt-in per-run raw persistence; see CompareRunOptions.rawOut. */
+  rawOut?: { dir: string };
 }
 
 /**
@@ -286,7 +297,7 @@ export interface MeasureRunOptions {
  * nonsense verdicts from sampling noise.
  */
 export async function runMeasure(options: MeasureRunOptions): Promise<MeasureSummary> {
-  const { config, runner, onProgress } = options;
+  const { config, runner, onProgress, rawOut } = options;
   validateRunnerSupport(config, runner);
   assertJudgeGradersCalibrated(config);
   const inline = config.delivery !== "install";
@@ -304,7 +315,7 @@ export async function runMeasure(options: MeasureRunOptions): Promise<MeasureSum
   const cases: MeasureCaseSummary[] = [];
   for (const { evalCase, systemPrompt } of rendered) {
     onProgress?.(`scenario ${evalCase.name}`);
-    const result = await runArm(config, evalCase, "baseline", systemPrompt, runner, onProgress, "measure");
+    const result = await runArm(config, evalCase, "baseline", systemPrompt, runner, onProgress, "measure", rawOut);
     cases.push({ name: evalCase.name, kind: evalCase.kind, result, promptSha256: sha256(systemPrompt) });
   }
 
@@ -385,15 +396,17 @@ async function runBaselineArm(
   runner: Runner,
   cache: { dir: string } | undefined,
   onProgress?: (message: string) => void,
+  rawOut?: { dir: string },
 ): Promise<ArmSummary> {
   if (cache === undefined) {
-    return runArm(config, evalCase, "baseline", systemPrompt, runner, onProgress);
+    return runArm(config, evalCase, "baseline", systemPrompt, runner, onProgress, "baseline", rawOut);
   }
   const key = buildCacheKey({
     systemPrompt,
     casePrompt: evalCase.prompt,
     arm: config.arms.baseline,
     runs: evalCase.runs ?? config.runs,
+    maxTurns: evalCase.maxTurns ?? config.maxTurns,
     tools: effectiveTools(config, evalCase),
     mode: effectiveMode(config, evalCase),
     delivery: config.delivery,
@@ -405,9 +418,12 @@ async function runBaselineArm(
   const hit = loadCachedArm(cache.dir, key);
   if (hit !== undefined) {
     onProgress?.(`  baseline: cache hit (${key.slice(0, 12)})`);
+    if (rawOut !== undefined) {
+      onProgress?.("  baseline: cache hit — no raw results to write");
+    }
     return { ...hit, cached: true };
   }
-  const summary = await runArm(config, evalCase, "baseline", systemPrompt, runner, onProgress);
+  const summary = await runArm(config, evalCase, "baseline", systemPrompt, runner, onProgress, "baseline", rawOut);
   storeCachedArm(cache.dir, key, summary);
   return summary;
 }
@@ -420,6 +436,7 @@ async function runArm(
   runner: Runner,
   onProgress?: (message: string) => void,
   label: string = arm,
+  rawOut?: { dir: string },
 ): Promise<ArmSummary> {
   const runs = evalCase.runs ?? config.runs;
   const summaries: ArmRunSummary[] = [];
@@ -445,12 +462,20 @@ async function runArm(
         }
       }
       const run = await runner.run(buildRunnerOptions(config, evalCase, arm, systemPrompt, sandbox.dir));
-      const grade = await gradeRun(evalCase.grader, {
-        run,
-        sandboxDir: sandbox.dir,
-        timeoutMs: config.timeoutMs,
-        maxBudgetUsd: config.maxBudgetUsd,
-      });
+      if (rawOut !== undefined) {
+        writeRawResult(rawOut.dir, evalCase.name, label, index + 1, run.raw);
+      }
+      // A capped run did not finish; grading its partial output would let an
+      // accidental-looking answer count as a cheap pass (and bill a judge call
+      // for a result that cannot stand either way).
+      const grade = run.exhaustedTurns
+        ? { pass: false, message: `hit the ${evalCase.maxTurns ?? config.maxTurns}-turn cap before finishing` }
+        : await gradeRun(evalCase.grader, {
+            run,
+            sandboxDir: sandbox.dir,
+            timeoutMs: config.timeoutMs,
+            maxBudgetUsd: config.maxBudgetUsd,
+          });
       summaries.push(toArmRunSummary(index + 1, run, grade, sandbox.dir));
     } finally {
       sandbox.cleanup();
@@ -488,7 +513,20 @@ function buildRunnerOptions(
     tools: effectiveTools(config, evalCase),
     timeoutMs: config.timeoutMs,
     maxBudgetUsd: config.maxBudgetUsd,
+    maxTurns: evalCase.maxTurns ?? config.maxTurns,
   };
+}
+
+/**
+ * One file per completed run, written as the run finishes — the full runner
+ * result (usage, modelUsage, subtype for claude-p) survives even if a later
+ * run aborts the invocation. Summaries deliberately keep only the digest;
+ * this is the escape hatch for token-level analysis.
+ */
+function writeRawResult(dir: string, caseName: string, label: string, runNumber: number, raw: unknown): void {
+  mkdirSync(dir, { recursive: true });
+  const safeCase = caseName.toLowerCase().replace(/[^a-z0-9_-]+/g, "-").replace(/^-+|-+$/g, "") || "scenario";
+  writeFileSync(join(dir, `${safeCase}_${label}_${runNumber}.json`), JSON.stringify(raw, null, 2) + "\n", "utf8");
 }
 
 function effectiveTools(config: CompareConfig, evalCase: EvalCaseConfig): string {

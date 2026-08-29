@@ -87,6 +87,13 @@ runs need headroom. Set `maxBudgetUsd` to `3` or more for artifact scenarios.
 A run that hits the cap fails with an explicit
 `claude hit the $N max budget` error rather than a silent bad sample.
 
+**Turn cap:** `--max-turns <n>` (or `"maxTurns"` in a scenario file, with a
+per-case override) caps agentic turns per run on the claude-p runner. Unlike
+a budget abort, a turn-capped run is a *measured outcome*: it is recorded and
+scored as a failed run without grading its partial output — an answer the
+agent stumbled into at the cap must not count as a cheap pass. Completion
+runners (openai) are single-turn and ignore the cap.
+
 ## Runners
 
 `--runner claude-p` (default) shells out to headless Claude Code and supports
@@ -284,6 +291,21 @@ Reading results:
 - Declare `"productionModel": "gpt-5.5"` and any arm testing a different
   model gets a warning on the summary — a pass on the wrong model validates
   prompt logic, not production behavior.
+
+### Raw per-run results
+
+Summaries, receipts, and the ndjson report digest each run down to pass/cost —
+the right altitude for verdicts, and the wrong one for token economics.
+`--raw-out <dir>` (on `compare` and `measure`) writes each run's **full runner
+result JSON** as `<scenario>_<arm>_<n>.json` the moment the run finishes: for
+claude-p that includes `usage` (input, cache-creation, cache-read, and output
+tokens), per-model `modelUsage`, and the result `subtype`. Cost-USD is a
+weighted sum of those categories (cache reads are priced far below fresh
+input), so experiments whose *question* is token behavior — did a prompt
+change cut exploration tokens, or just shift reads into cache? — need the
+categories, not the blend. Files are written per run, so a compare that dies
+midway still leaves the completed runs' records. Cache-served baseline arms
+ran in an earlier invocation and write nothing.
 
 ### Run history
 

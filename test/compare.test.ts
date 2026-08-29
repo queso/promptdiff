@@ -206,3 +206,114 @@ test("formatCompareSummary labels arms when models differ and flags mixed-runner
   };
   expect(formatCompareSummary(identical)).toContain("  baseline: 3/5 pass");
 });
+
+import { existsSync, readFileSync } from "node:fs";
+import { runMeasure } from "../src/engine/compare";
+
+function fixtureDir(): { dir: string; agent: string; baseline: string; proposed: string } {
+  const dir = mkdtempSync(join(tmpdir(), "promptdiff-compare-test-"));
+  const agent = join(dir, "agent.md");
+  const baseline = join(dir, "baseline.md");
+  const proposed = join(dir, "proposed.md");
+  writeFileSync(agent, "Agent", "utf8");
+  writeFileSync(baseline, "BASELINE", "utf8");
+  writeFileSync(proposed, "PROPOSED", "utf8");
+  return { dir, agent, baseline, proposed };
+}
+
+function cappedConfig(fixture: ReturnType<typeof fixtureDir>, maxTurns?: number): CompareConfig {
+  return {
+    name: "capped compare",
+    agent: fixture.agent,
+    baselineSkills: [fixture.baseline],
+    proposedSkills: [fixture.proposed],
+    delivery: "inline",
+    arms: {
+      baseline: { model: "sonnet", runner: "claude-p" },
+      proposed: { model: "sonnet", runner: "claude-p" },
+    },
+    runs: 1,
+    timeoutMs: 1_000,
+    maxBudgetUsd: 1,
+    maxTurns,
+    addDirs: [],
+    sandboxRoot: join(fixture.dir, "runs"),
+    keepSandbox: false,
+    cases: [
+      {
+        name: "Case One",
+        kind: "compare",
+        prompt: "task",
+        grader: { type: "text", contains: ["ok"] },
+        images: [],
+        addDirs: [],
+      },
+    ],
+  };
+}
+
+test("a run that exhausted its turn cap fails without grading its partial output", async () => {
+  const fixture = fixtureDir();
+  try {
+    // Output would satisfy the grader — the cap must fail the run anyway.
+    const runner: Runner = {
+      name: "mock",
+      capabilities: { sandboxTools: true, skillRegistry: true, images: false },
+      async run(options: RunnerRunOptions) {
+        expect(options.maxTurns).toBe(7);
+        const capped = options.systemPrompt.includes("BASELINE");
+        return {
+          output: "ok",
+          costUsd: 0.1,
+          turns: capped ? 7 : 3,
+          durationMs: 10,
+          models: ["sonnet"],
+          exhaustedTurns: capped ? true : undefined,
+          raw: {},
+        };
+      },
+    };
+
+    const summary = await runCompare({ config: cappedConfig(fixture, 7), runners: { baseline: runner, proposed: runner } });
+    expect(summary.cases[0]?.baseline.passes).toBe(0);
+    expect(summary.cases[0]?.baseline.runs[0]?.grade.message).toBe("hit the 7-turn cap before finishing");
+    expect(summary.cases[0]?.proposed.passes).toBe(1);
+  } finally {
+    rmSync(fixture.dir, { recursive: true, force: true });
+  }
+});
+
+test("rawOut persists each run's full runner result for both compare arms and for measure", async () => {
+  const fixture = fixtureDir();
+  try {
+    const usage = { input_tokens: 100, cache_read_input_tokens: 900, output_tokens: 50 };
+    const runner: Runner = {
+      name: "mock",
+      capabilities: { sandboxTools: true, skillRegistry: true, images: false },
+      async run(options: RunnerRunOptions) {
+        const arm = options.systemPrompt.includes("BASELINE") ? "baseline" : "proposed";
+        return { output: "ok", costUsd: 0.1, turns: 1, durationMs: 10, models: ["sonnet"], raw: { arm, usage } };
+      },
+    };
+
+    const rawDir = join(fixture.dir, "raw");
+    const config = cappedConfig(fixture);
+    await runCompare({ config, runners: { baseline: runner, proposed: runner }, rawOut: { dir: rawDir } });
+
+    // Case names are sanitized the same way receipts sanitize scenario names.
+    const baselineRaw = JSON.parse(readFileSync(join(rawDir, "case-one_baseline_1.json"), "utf8"));
+    expect(baselineRaw.arm).toBe("baseline");
+    expect(baselineRaw.usage).toEqual(usage);
+    expect(JSON.parse(readFileSync(join(rawDir, "case-one_proposed_1.json"), "utf8")).arm).toBe("proposed");
+
+    const measureDir = join(fixture.dir, "raw-measure");
+    await runMeasure({ config, runner, rawOut: { dir: measureDir } });
+    expect(existsSync(join(measureDir, "case-one_measure_1.json"))).toBe(true);
+
+    // Without rawOut nothing extra is written.
+    const plain = await runCompare({ config, runners: { baseline: runner, proposed: runner } });
+    expect(plain.cases[0]?.baseline.passes).toBe(1);
+  } finally {
+    rmSync(fixture.dir, { recursive: true, force: true });
+  }
+});

@@ -8,6 +8,12 @@ export interface RunResult {
   turns: number;
   durationMs: number;
   models: string[];
+  /**
+   * True when the run stopped at the maxTurns cap instead of finishing. The
+   * engine fails such runs without grading — partial output that happens to
+   * satisfy a grader must not count as a pass.
+   */
+  exhaustedTurns?: boolean;
   raw: unknown;
 }
 
@@ -56,6 +62,8 @@ export interface RunnerRunOptions {
   tools: string;
   addDirs: string[];
   maxBudgetUsd: number;
+  /** Turn cap for agentic runners; completion runners are single-turn and ignore it. */
+  maxTurns?: number;
 }
 
 export interface Runner {

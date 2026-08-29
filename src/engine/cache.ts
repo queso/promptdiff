@@ -20,6 +20,8 @@ export interface CacheKeyInput {
   arm: ArmConfig;
   /** Effective run count for the case (case runs ?? config runs). */
   runs: number;
+  /** Effective turn cap for the case (case maxTurns ?? config maxTurns), if any. */
+  maxTurns?: number;
   /** Effective tools string for the case. */
   tools: string;
   /** Effective run mode for the case. */
@@ -53,6 +55,9 @@ export function buildCacheKey(input: CacheKeyInput): string {
     runner: input.arm.runner,
     baseUrl: input.arm.baseUrl ?? "none",
     runs: input.runs,
+    // stableStringify drops undefined entries, so scenarios without a cap keep
+    // their pre-maxTurns cache keys.
+    maxTurns: input.maxTurns,
     tools: input.tools,
     mode: input.mode,
     delivery: input.delivery,

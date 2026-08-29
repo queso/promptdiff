@@ -213,3 +213,39 @@ test("pricing parses per-model rates and rejects gaps for openai arms", () => {
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test("loadCompareConfig parses maxTurns at both levels and rejects bad caps", () => {
+  const dir = mkdtempSync(join(tmpdir(), "promptdiff-config-test-"));
+  try {
+    writeFileSync(join(dir, "agent.md"), "Agent", "utf8");
+    writeFileSync(join(dir, "baseline.md"), "Baseline", "utf8");
+    writeFileSync(join(dir, "proposed.md"), "Proposed", "utf8");
+    const scenario = (extra: object, cases: object = {}) =>
+      JSON.stringify({
+        agent: "./agent.md",
+        baselineSkills: ["./baseline.md"],
+        proposedSkills: ["./proposed.md"],
+        model: "sonnet",
+        scenarios: [{ name: "t", prompt: "p", grader: { type: "text", contains: ["ok"] }, ...cases }],
+        ...extra,
+      });
+
+    writeFileSync(join(dir, "capped.json"), scenario({ maxTurns: 25 }, { maxTurns: 10 }), "utf8");
+    const config = loadCompareConfig(join(dir, "capped.json"));
+    expect(config.maxTurns).toBe(25);
+    expect(config.cases[0]?.maxTurns).toBe(10);
+    // CLI override wins over the scenario file.
+    expect(loadCompareConfig(join(dir, "capped.json"), { maxTurns: 5 }).maxTurns).toBe(5);
+
+    writeFileSync(join(dir, "uncapped.json"), scenario({}), "utf8");
+    expect(loadCompareConfig(join(dir, "uncapped.json")).maxTurns).toBeUndefined();
+
+    writeFileSync(join(dir, "zero.json"), scenario({ maxTurns: 0 }), "utf8");
+    expect(() => loadCompareConfig(join(dir, "zero.json"))).toThrow("maxTurns must be an integer of at least 1");
+
+    writeFileSync(join(dir, "fractional-case.json"), scenario({}, { maxTurns: 2.5 }), "utf8");
+    expect(() => loadCompareConfig(join(dir, "fractional-case.json"))).toThrow("t.maxTurns must be an integer of at least 1");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

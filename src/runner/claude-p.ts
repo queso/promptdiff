@@ -40,6 +40,7 @@ export function buildClaudeArgs(options: RunnerRunOptions & { systemPromptFile: 
     ...toolArgs,
     "--max-budget-usd",
     String(options.maxBudgetUsd),
+    ...(options.maxTurns === undefined ? [] : ["--max-turns", String(options.maxTurns)]),
     "--no-session-persistence",
     // Headless denies file edits without an explicit permission mode, which breaks
     // artifact-mode agents that must write outputs (e.g. findings.json) into the
@@ -93,6 +94,13 @@ export class ClaudePrintRunner implements Runner {
         throw new Error(`claude timed out after ${options.timeoutMs}ms`);
       }
       if (code !== 0) {
+        // A turn-cap stop is a measured outcome, not a crash: claude may exit
+        // non-zero with the full result JSON on stdout. Return it so the engine
+        // can score the run as a failure instead of aborting the comparison.
+        const capped = tryParseClaudeJson(stdout);
+        if (capped?.subtype === "error_max_turns") {
+          return normalizeClaudeResult(capped);
+        }
         throw new Error(describeClaudeFailure(code, stdout, stderr, options.maxBudgetUsd));
       }
 
@@ -122,12 +130,7 @@ export function describeClaudeFailure(
   stderr: string,
   maxBudgetUsd: number,
 ): string {
-  let parsed: ClaudeJsonResult | undefined;
-  try {
-    parsed = JSON.parse(stdout) as ClaudeJsonResult;
-  } catch {
-    // Not JSON — fall through to the raw-stream message.
-  }
+  const parsed = tryParseClaudeJson(stdout);
 
   if (parsed && typeof parsed === "object") {
     if (parsed.subtype === "error_max_budget_usd") {
@@ -143,6 +146,14 @@ export function describeClaudeFailure(
   return `claude exited ${code}: ${detail.slice(0, 1_500)}`;
 }
 
+function tryParseClaudeJson(stdout: string): ClaudeJsonResult | undefined {
+  try {
+    return JSON.parse(stdout) as ClaudeJsonResult;
+  } catch {
+    return undefined;
+  }
+}
+
 function normalizeClaudeResult(result: ClaudeJsonResult): RunResult {
   const modelUsage = result.modelUsage;
   return {
@@ -151,6 +162,7 @@ function normalizeClaudeResult(result: ClaudeJsonResult): RunResult {
     turns: typeof result.num_turns === "number" ? result.num_turns : 0,
     durationMs: typeof result.duration_ms === "number" ? result.duration_ms : 0,
     models: modelUsage && typeof modelUsage === "object" ? Object.keys(modelUsage) : [],
+    ...(result.subtype === "error_max_turns" ? { exhaustedTurns: true } : {}),
     raw: result,
   };
 }
