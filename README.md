@@ -64,6 +64,35 @@ Run from the repo:
 ./promptdiff --help
 ```
 
+## See it work
+
+The smallest possible comparison — the baseline skill is missing one
+instruction, the proposed skill adds it, a text grader catches the effect:
+
+```bash
+./promptdiff compare --scenario ./examples/01-hello-compare/scenario.json
+```
+
+```
+promptdiff compare: hello-compare
+
+answers-with-summary-prefix (target)
+  baseline: 0/2 pass (0%) | $0.0021
+  proposed: 2/2 pass (100%) | $0.0033
+  delta: +100% pass | +$0.0013
+  PASS: assertions satisfied
+
+total cost: $0.0054
+```
+
+That's real output from a real run (about a cent, ~12 seconds). The
+[`examples/`](./examples/) directory has six runnable, self-contained
+examples ordered as a learning curve — from this hello case through the
+fix-a-defect-without-regressing loop, measure-first characterization,
+calibrated LLM judges, non-Claude models via ollama, and token-level
+analysis with turn caps — each with its own README, honest cost label,
+and captured output.
+
 ## Safe Defaults
 
 Paid model calls are bounded by default:
