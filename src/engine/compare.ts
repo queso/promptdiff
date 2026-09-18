@@ -588,7 +588,16 @@ function openTranscript(dir: string, caseName: string, label: string, runNumber:
   return {
     write(line: string): void {
       if (!open) return;
-      writeSync(fd, line.endsWith("\n") ? line : `${line}\n`);
+      const payload = Buffer.from(line.endsWith("\n") ? line : `${line}\n`, "utf8");
+      // writeSync may legally write fewer bytes than asked (a signal, a full
+      // disk) — a short write would truncate an NDJSON line and corrupt the
+      // evidence these files exist to preserve. Loop on byte offsets, not
+      // string indices: slicing the string by the returned count would
+      // misalign on any multi-byte UTF-8 character.
+      let written = 0;
+      while (written < payload.length) {
+        written += writeSync(fd, payload, written, payload.length - written);
+      }
     },
     close(): void {
       if (!open) return;

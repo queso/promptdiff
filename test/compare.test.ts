@@ -443,3 +443,63 @@ test("an unwritable transcriptOut dir is refused before any paid run and leaves 
     rmSync(fixture.dir, { recursive: true, force: true });
   }
 });
+
+test("transcriptOut round-trips multi-byte event content exactly", async () => {
+  const fixture = fixtureDir();
+  try {
+    // CJK, an emoji, and accented Latin each encode to a different number of
+    // UTF-8 bytes per character. This pins the encoding end to end: the sink
+    // writes bytes, and what lands on disk has to parse back identically.
+    const multiByte = "こんにちは 🎉 café";
+    const runner: Runner = {
+      name: "mock-stream",
+      capabilities: { sandboxTools: true, skillRegistry: true, images: false, streamEvents: true },
+      async run(options: RunnerRunOptions) {
+        options.onStreamEvent?.(JSON.stringify({ type: "assistant", text: multiByte }));
+        return { output: "ok", costUsd: 0.1, turns: 1, durationMs: 10, models: ["sonnet"], raw: {} };
+      },
+    };
+
+    const config = cappedConfig(fixture);
+    const dir = join(fixture.dir, "transcripts-multibyte");
+    await runCompare({ config, runners: { baseline: runner, proposed: runner }, transcriptOut: { dir } });
+
+    const lines = readFileSync(join(dir, "case-one_baseline_1.stream.jsonl"), "utf8").trim().split("\n");
+    expect(lines).toHaveLength(1);
+    expect(JSON.parse(lines[0] ?? "{}").text).toBe(multiByte);
+  } finally {
+    rmSync(fixture.dir, { recursive: true, force: true });
+  }
+});
+
+test("transcriptOut writes a large event line whole", async () => {
+  const fixture = fixtureDir();
+  try {
+    // A quarter-megabyte line, well past any real event, so the write path is
+    // exercised at a size where a short write is at least possible. On a
+    // regular file one writeSync still completes it here, so this is
+    // round-trip coverage, not proof that the loop handles a short count.
+    const big = "x".repeat(250_000);
+    const runner: Runner = {
+      name: "mock-stream",
+      capabilities: { sandboxTools: true, skillRegistry: true, images: false, streamEvents: true },
+      async run(options: RunnerRunOptions) {
+        options.onStreamEvent?.(JSON.stringify({ type: "assistant", text: big }));
+        return { output: "ok", costUsd: 0.1, turns: 1, durationMs: 10, models: ["sonnet"], raw: {} };
+      },
+    };
+
+    const config = cappedConfig(fixture);
+    const dir = join(fixture.dir, "transcripts-large");
+    await runCompare({ config, runners: { baseline: runner, proposed: runner }, transcriptOut: { dir } });
+
+    const raw = readFileSync(join(dir, "case-one_baseline_1.stream.jsonl"), "utf8");
+    const lines = raw.trim().split("\n");
+    expect(lines).toHaveLength(1);
+    const line = lines[0] ?? "";
+    expect(Buffer.byteLength(line, "utf8")).toBe(line.length); // ASCII payload: bytes == chars, sanity-checks the assertion below
+    expect(JSON.parse(line).text).toBe(big);
+  } finally {
+    rmSync(fixture.dir, { recursive: true, force: true });
+  }
+});
