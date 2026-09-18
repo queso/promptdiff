@@ -1,0 +1,24 @@
+{
+  "name": "token-economics",
+  "agent": "./agent.md",
+  "skills": ["./skill.md"],
+  "model": "sonnet",
+  "runs": 2,
+  "maxBudgetUsd": 2,
+  "timeoutMs": 120000,
+  "mode": "artifact",
+  "sandbox": {
+    "root": ".promptdiff/runs",
+    "seed": "./seed"
+  },
+  "scenarios": [
+    {
+      "name": "find-retry-backoff-module",
+      "prompt": "This directory is a small Python service. Which file implements exponential backoff for retries? Answer with only the filename.",
+      "grader": {
+        "type": "text",
+        "contains": ["queue.py"]
+      }
+    }
+  ]
+}

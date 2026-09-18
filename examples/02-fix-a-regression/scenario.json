@@ -1,0 +1,38 @@
+{
+  "name": "commit-message subject length",
+  "agent": "./agent.md",
+  "baselineSkills": ["./skills/commit-message.baseline.md"],
+  "proposedSkills": ["./skills/commit-message.proposed.md"],
+  "model": "haiku",
+  "mode": "text",
+  "runs": 3,
+  "maxBudgetUsd": 1,
+  "scenarios": [
+    {
+      "name": "target-multi-part-change",
+      "kind": "target",
+      "prompt": "Write a commit message for this change: replaced the in-memory session store with Redis-backed sessions, added automatic session expiry after 30 minutes of inactivity, updated the login and logout handlers to use the new session store, and migrated the existing session tests to mock Redis instead of the in-memory map.",
+      "grader": {
+        "type": "text",
+        "regex": [
+          "^(feat|fix|docs|style|refactor|perf|test|build|ci|chore|revert)(\\([^)]+\\))?!?: \\S",
+          "^.{1,50}(\\n|$)"
+        ],
+        "notContains": ["```"]
+      }
+    },
+    {
+      "name": "regression-simple-typo-fix",
+      "kind": "regression",
+      "prompt": "Write a commit message for this change: fixed a typo in the README.",
+      "grader": {
+        "type": "text",
+        "regex": [
+          "^(feat|fix|docs|style|refactor|perf|test|build|ci|chore|revert)(\\([^)]+\\))?!?: \\S",
+          "^.{1,50}(\\n|$)"
+        ],
+        "notContains": ["```"]
+      }
+    }
+  ]
+}

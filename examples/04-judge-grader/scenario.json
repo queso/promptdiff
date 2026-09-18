@@ -1,0 +1,22 @@
+{
+  "name": "plain-language support answers",
+  "agent": "./agent.md",
+  "baselineSkills": ["./skills/explain-plainly.baseline.md"],
+  "proposedSkills": ["./skills/explain-plainly.proposed.md"],
+  "model": "haiku",
+  "runs": 3,
+  "maxBudgetUsd": 1,
+  "scenarios": [
+    {
+      "name": "nameserver-change-support-reply",
+      "kind": "target",
+      "prompt": "Customer wrote in: \"I switched my domain's nameservers to point at your hosting two hours ago, and my site still shows the old host for some of my friends but not others. Is something broken?\" Write the reply.",
+      "grader": {
+        "type": "judge",
+        "rubric": "./rubrics/audience-appropriate.md",
+        "model": "haiku",
+        "minAccuracy": 0.9
+      }
+    }
+  ]
+}

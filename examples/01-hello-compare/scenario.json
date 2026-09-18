@@ -1,0 +1,19 @@
+{
+  "name": "hello-compare",
+  "agent": "./agent.md",
+  "baselineSkills": ["./baseline.md"],
+  "proposedSkills": ["./proposed.md"],
+  "model": "haiku",
+  "runs": 2,
+  "scenarios": [
+    {
+      "name": "answers-with-summary-prefix",
+      "kind": "target",
+      "prompt": "What is the capital of France?",
+      "grader": {
+        "type": "text",
+        "contains": ["SUMMARY:"]
+      }
+    }
+  ]
+}

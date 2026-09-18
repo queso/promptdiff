@@ -1,0 +1,22 @@
+{
+  "name": "any-model-ollama",
+  "agent": "./agent.md",
+  "baselineSkills": ["./baseline.md"],
+  "proposedSkills": ["./proposed.md"],
+  "runner": "openai",
+  "baseUrl": "http://localhost:11434/v1",
+  "model": "llama3.2:1b",
+  "runs": 3,
+  "scenarios": [
+    {
+      "name": "validation-explanation",
+      "kind": "target",
+      "prompt": "Explain how you would validate POST /api/items.",
+      "grader": {
+        "type": "text",
+        "contains": ["400"],
+        "notContains": ["TODO"]
+      }
+    }
+  ]
+}
