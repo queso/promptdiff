@@ -427,6 +427,36 @@ test("the last result event wins when the run exits cleanly", async () => {
   }
 });
 
+test("a mid-stream result event is not scored as the outcome when the run then exits cleanly with no real terminal event", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "promptdiff-runner-test-"));
+  try {
+    // A result event fires mid-stream, another event follows it, and then the
+    // process exits 0 without ever emitting a real terminal result event.
+    // Claude exiting 0 normally means the run finished cleanly on its result
+    // event, so this combination is self-contradictory — it must reject
+    // rather than score MID_STREAM_RESULT_EVENT as the outcome.
+    const body = [
+      `echo '${JSON.stringify(STREAM_EVENTS[0])}'`,
+      `echo '${JSON.stringify(MID_STREAM_RESULT_EVENT)}'`,
+      `echo '${JSON.stringify(STREAM_EVENTS[1])}'`,
+    ].join("\n");
+    const runner = new ClaudePrintRunner(fakeClaude(dir, body));
+
+    const lines: string[] = [];
+    // A distinct message from the truncated-stream case: a result event was
+    // produced here, it just was not last, and someone reading the failure
+    // should not go looking for a missing event.
+    await expect(runner.run(streamRunOptions(dir, (line) => lines.push(line)))).rejects.toThrow(
+      /result event before the end of the stream/,
+    );
+
+    // The printed lines are still evidence even though the run has no outcome to score.
+    expect(lines).toHaveLength(3);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test("stream mode decodes turn caps and budget aborts out of NDJSON", async () => {
   const dir = mkdtempSync(join(tmpdir(), "promptdiff-runner-test-"));
   try {
@@ -489,12 +519,15 @@ test("a single event line spanning many stdout chunks is still read whole", asyn
       `printf '%s' '{"type":"assistant","big":"'`,
       `head -c ${bigFieldChars} /dev/zero | tr '\\0' 'a'`,
       `printf '"}\\n'`,
-      `echo '${JSON.stringify(STREAM_EVENTS[3])}'`,
       // A short line after the giant one: if a late chunk happens to land
       // two newlines at once (the giant line's close plus this line's own),
       // a stale scan offset would merge them into one garbled line instead
       // of missing them outright — this line is what would expose that.
+      // It comes before the terminal result event (not after): a result
+      // event only counts as the run's outcome when it is the last line the
+      // stream produced, so this line has to sit ahead of it, not behind it.
       `echo '${JSON.stringify(STREAM_EVENTS[1])}'`,
+      `echo '${JSON.stringify(STREAM_EVENTS[3])}'`,
     ].join("\n");
     const runner = new ClaudePrintRunner(fakeClaude(dir, body));
 
@@ -502,7 +535,7 @@ test("a single event line spanning many stdout chunks is still read whole", asyn
     const result = await runner.run(streamRunOptions(dir, (line) => lines.push(line)));
 
     // Exactly the four lines the script printed: init, the giant line, the
-    // terminal result, and the trailing line — a dropped, duplicated, or
+    // short line, and the terminal result — a dropped, duplicated, or
     // merged newline boundary would show up here as the wrong count.
     expect(lines).toHaveLength(4);
 
@@ -510,7 +543,7 @@ test("a single event line spanning many stdout chunks is still read whole", asyn
     expect(big.big).toHaveLength(bigFieldChars);
     expect(big.big).toBe("a".repeat(bigFieldChars));
 
-    const trailing = JSON.parse(lines[3] ?? "{}") as { message: { usage: { cache_read_input_tokens: number } } };
+    const trailing = JSON.parse(lines[2] ?? "{}") as { message: { usage: { cache_read_input_tokens: number } } };
     expect(trailing.message.usage.cache_read_input_tokens).toBe(9_000);
 
     expect(result.output).toBe("done");

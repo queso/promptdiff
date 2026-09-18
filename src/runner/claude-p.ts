@@ -121,11 +121,20 @@ export class ClaudePrintRunner implements Runner {
 
       if (sink !== undefined) {
         // A stream killed mid-flight (SIGTERM, a crashed CLI) ends without its
-        // terminal event, so "the last line is the result" is not safe. The
-        // lines already written stay on disk as evidence; the run itself has
-        // no outcome to score.
+        // terminal event, so "the last line is the result" is not safe. Neither
+        // is a result event that fired mid-stream and was then followed by more
+        // output, even on a clean exit. Either way there is no outcome to score,
+        // and the lines already written stay on disk as evidence. The two causes
+        // get separate messages: a run that hard-fails here is only worth failing
+        // loudly if whoever reads the message can tell which one happened.
         if (out.result === undefined) {
           throw new Error(`claude produced no terminal result event${tailForMessage(out.text)}`);
+        }
+        if (!out.resultIsTerminal) {
+          throw new Error(
+            `claude emitted a result event before the end of the stream — refusing to score a ` +
+              `non-terminal event${tailForMessage(out.text)}`,
+          );
         }
         return normalizeClaudeResult(out.result);
       }
