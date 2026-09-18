@@ -401,6 +401,32 @@ test("a mid-stream result event is not scored as the outcome when the run is the
   }
 });
 
+test("the last result event wins when the run exits cleanly", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "promptdiff-runner-test-"));
+  try {
+    // A result event fires mid-stream, then the real terminal result event
+    // follows, and the process exits 0. The mid-stream event must not win
+    // just because it arrived first — only the last one is the outcome.
+    const body = [
+      `echo '${JSON.stringify(STREAM_EVENTS[0])}'`,
+      `echo '${JSON.stringify(MID_STREAM_RESULT_EVENT)}'`,
+      `echo '${JSON.stringify(STREAM_EVENTS[3])}'`,
+    ].join("\n");
+    const runner = new ClaudePrintRunner(fakeClaude(dir, body));
+
+    const lines: string[] = [];
+    const result = await runner.run(streamRunOptions(dir, (line) => lines.push(line)));
+
+    expect(lines).toHaveLength(3);
+    expect(result.output).toBe("done");
+    expect(result.turns).toBe(2);
+    expect(result.costUsd).toBeCloseTo(0.03);
+    expect(result.output).not.toBe(MID_STREAM_RESULT_EVENT.result);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test("stream mode decodes turn caps and budget aborts out of NDJSON", async () => {
   const dir = mkdtempSync(join(tmpdir(), "promptdiff-runner-test-"));
   try {
@@ -419,6 +445,52 @@ test("stream mode decodes turn caps and budget aborts out of NDJSON", async () =
     // Whole-stdout JSON.parse fails on NDJSON, which would have made a budget
     // abort read as a bare exit code again.
     await expect(new ClaudePrintRunner(broke).run(streamRunOptions(dir, () => {}))).rejects.toThrow("max budget");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("a single event line spanning many stdout chunks is still read whole", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "promptdiff-runner-test-"));
+  try {
+    // A pipe hands back far less than 2MB per read, so a field this large
+    // splits the NDJSON line across many stdout chunks (11 here) — the case
+    // the per-chunk scan-offset arithmetic has to get right. Built with
+    // head/tr rather than an embedded literal: a 2,000,000-character
+    // argument to echo risks blowing past ARG_MAX.
+    const bigFieldChars = 2_000_000;
+    const body = [
+      `echo '${JSON.stringify(STREAM_EVENTS[0])}'`,
+      `printf '%s' '{"type":"assistant","big":"'`,
+      `head -c ${bigFieldChars} /dev/zero | tr '\\0' 'a'`,
+      `printf '"}\\n'`,
+      `echo '${JSON.stringify(STREAM_EVENTS[3])}'`,
+      // A short line after the giant one: if a late chunk happens to land
+      // two newlines at once (the giant line's close plus this line's own),
+      // a stale scan offset would merge them into one garbled line instead
+      // of missing them outright — this line is what would expose that.
+      `echo '${JSON.stringify(STREAM_EVENTS[1])}'`,
+    ].join("\n");
+    const runner = new ClaudePrintRunner(fakeClaude(dir, body));
+
+    const lines: string[] = [];
+    const result = await runner.run(streamRunOptions(dir, (line) => lines.push(line)));
+
+    // Exactly the four lines the script printed: init, the giant line, the
+    // terminal result, and the trailing line — a dropped, duplicated, or
+    // merged newline boundary would show up here as the wrong count.
+    expect(lines).toHaveLength(4);
+
+    const big = JSON.parse(lines[1] ?? "{}") as { big: string };
+    expect(big.big).toHaveLength(bigFieldChars);
+    expect(big.big).toBe("a".repeat(bigFieldChars));
+
+    const trailing = JSON.parse(lines[3] ?? "{}") as { message: { usage: { cache_read_input_tokens: number } } };
+    expect(trailing.message.usage.cache_read_input_tokens).toBe(9_000);
+
+    expect(result.output).toBe("done");
+    expect(result.turns).toBe(2);
+    expect(result.costUsd).toBeCloseTo(0.03);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

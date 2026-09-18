@@ -211,8 +211,13 @@ async function consumeStreamJson(
   };
 
   for await (const chunk of stdout) {
+    // `pending` up to this length was already scanned for "\n" with none
+    // found (that's why the previous iteration's while loop exited) — only
+    // the newly appended bytes need to be searched. Once a line is sliced
+    // off below, the remaining buffer is unscanned from its own start 0.
+    const scanned = pending.length;
     pending += decoder.decode(chunk, { stream: true });
-    let newline = pending.indexOf("\n");
+    let newline = pending.indexOf("\n", scanned);
     while (newline !== -1) {
       handleLine(pending.slice(0, newline));
       pending = pending.slice(newline + 1);
