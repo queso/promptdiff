@@ -596,7 +596,13 @@ function openTranscript(dir: string, caseName: string, label: string, runNumber:
       // misalign on any multi-byte UTF-8 character.
       let written = 0;
       while (written < payload.length) {
-        written += writeSync(fd, payload, written, payload.length - written);
+        const n = writeSync(fd, payload, written, payload.length - written);
+        // A zero-byte write is legal and makes no progress — looping on it
+        // would hang the run inside the runner's event callback. Throwing
+        // bounds it: the caller's finally still closes the transcript and
+        // cleans the sandbox, and the lines already written stay on disk.
+        if (n <= 0) throw new Error(`transcript write stalled at ${written}/${payload.length} bytes`);
+        written += n;
       }
     },
     close(): void {

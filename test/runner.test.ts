@@ -450,6 +450,31 @@ test("stream mode decodes turn caps and budget aborts out of NDJSON", async () =
   }
 });
 
+test("a mid-stream turn-cap event followed by more stream and a crash is not scored as exhaustedTurns", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "promptdiff-runner-test-"));
+  try {
+    // MAX_TURNS_STDOUT fires mid-stream (not as the last line), another event
+    // follows it, and then the process exits non-zero without ever emitting a
+    // real terminal result. The run must be reported as a failure — scoring it
+    // as exhaustedTurns would corrupt the measurement by turning a crash into
+    // a counted, "completed" data point.
+    const body = [
+      `echo '${JSON.stringify(STREAM_EVENTS[0])}'`,
+      `echo '${MAX_TURNS_STDOUT}'`,
+      `echo '${JSON.stringify(STREAM_EVENTS[1])}'`,
+      "exit 1",
+    ].join("\n");
+    const runner = new ClaudePrintRunner(fakeClaude(dir, body));
+
+    const lines: string[] = [];
+    await expect(runner.run(streamRunOptions(dir, (line) => lines.push(line)))).rejects.toThrow(/claude exited 1/);
+
+    expect(lines).toHaveLength(3);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test("a single event line spanning many stdout chunks is still read whole", async () => {
   const dir = mkdtempSync(join(tmpdir(), "promptdiff-runner-test-"));
   try {
