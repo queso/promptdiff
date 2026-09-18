@@ -4,6 +4,7 @@ import { join } from "node:path";
 import type { RunResult, Runner, RunnerRunOptions } from "../types";
 
 interface ClaudeJsonResult {
+  type?: unknown;
   result?: unknown;
   subtype?: unknown;
   total_cost_usd?: unknown;
@@ -29,12 +30,19 @@ export function buildClaudeArgs(options: RunnerRunOptions & { systemPromptFile: 
       ? ["--tools", options.tools]
       : ["--tools", options.tools, "--allowedTools", options.tools];
 
+  // A transcript sink needs the per-event stream; the terminal event of that
+  // stream is the same result object --output-format json prints on its own.
+  // stream-json is only valid with --verbose under -p.
+  const outputArgs =
+    options.onStreamEvent === undefined
+      ? ["--output-format", "json"]
+      : ["--output-format", "stream-json", "--verbose"];
+
   const args = [
     "-p",
     options.userPrompt,
     ...systemPromptArgs,
-    "--output-format",
-    "json",
+    ...outputArgs,
     "--model",
     options.model,
     ...toolArgs,
@@ -59,7 +67,7 @@ export function buildClaudeArgs(options: RunnerRunOptions & { systemPromptFile: 
 
 export class ClaudePrintRunner implements Runner {
   readonly name = "claude-p";
-  readonly capabilities = { sandboxTools: true, skillRegistry: true, images: false };
+  readonly capabilities = { sandboxTools: true, skillRegistry: true, images: false, streamEvents: true };
 
   constructor(private readonly claudeBin = "claude") {}
 
@@ -83,8 +91,9 @@ export class ClaudePrintRunner implements Runner {
         setTimeout(() => proc.kill("SIGKILL"), 2_000);
       }, options.timeoutMs);
 
-      const [stdout, stderr, code] = await Promise.all([
-        new Response(proc.stdout).text(),
+      const sink = options.onStreamEvent;
+      const [out, stderr, code] = await Promise.all([
+        sink === undefined ? readWholeStdout(proc.stdout) : consumeStreamJson(proc.stdout, sink),
         new Response(proc.stderr).text(),
         proc.exited,
       ]);
@@ -97,19 +106,30 @@ export class ClaudePrintRunner implements Runner {
         // A turn-cap stop is a measured outcome, not a crash: claude may exit
         // non-zero with the full result JSON on stdout. Return it so the engine
         // can score the run as a failure instead of aborting the comparison.
-        const capped = tryParseClaudeJson(stdout);
+        const capped = out.result ?? tryParseClaudeJson(out.text);
         if (capped?.subtype === "error_max_turns") {
           return normalizeClaudeResult(capped);
         }
-        throw new Error(describeClaudeFailure(code, stdout, stderr, options.maxBudgetUsd));
+        throw new Error(describeClaudeFailure(code, out.text, stderr, options.maxBudgetUsd, out.result));
+      }
+
+      if (sink !== undefined) {
+        // A stream killed mid-flight (SIGTERM, a crashed CLI) ends without its
+        // terminal event, so "the last line is the result" is not safe. The
+        // lines already written stay on disk as evidence; the run itself has
+        // no outcome to score.
+        if (out.result === undefined) {
+          throw new Error(`claude produced no terminal result event${tailForMessage(out.text)}`);
+        }
+        return normalizeClaudeResult(out.result);
       }
 
       let parsed: ClaudeJsonResult;
       try {
-        parsed = JSON.parse(stdout) as ClaudeJsonResult;
+        parsed = JSON.parse(out.text) as ClaudeJsonResult;
       } catch (error) {
         const reason = error instanceof Error ? error.message : String(error);
-        throw new Error(`claude returned invalid JSON: ${reason}\n${stdout.slice(0, 1_500)}`);
+        throw new Error(`claude returned invalid JSON: ${reason}\n${out.text.slice(0, 1_500)}`);
       }
 
       return normalizeClaudeResult(parsed);
@@ -129,8 +149,10 @@ export function describeClaudeFailure(
   stdout: string,
   stderr: string,
   maxBudgetUsd: number,
+  /** Terminal result event, already decoded — stream-json stdout will not parse whole. */
+  streamResult?: ClaudeJsonResult,
 ): string {
-  const parsed = tryParseClaudeJson(stdout);
+  const parsed = streamResult ?? tryParseClaudeJson(stdout);
 
   if (parsed && typeof parsed === "object") {
     if (parsed.subtype === "error_max_budget_usd") {
@@ -144,6 +166,66 @@ export function describeClaudeFailure(
 
   const detail = stderr.trim().length > 0 ? stderr : stdout;
   return `claude exited ${code}: ${detail.slice(0, 1_500)}`;
+}
+
+/** Bytes of stdout kept for diagnostics when the stream is too big to hold. */
+const STDOUT_TAIL_CHARS = 4_000;
+
+interface ClaudeStdout {
+  /** stdout text for error messages: all of it in json mode, a tail in stream mode. */
+  text: string;
+  /** Terminal `result` event; only stream mode decodes one while reading. */
+  result?: ClaudeJsonResult;
+}
+
+async function readWholeStdout(stdout: ReadableStream<Uint8Array>): Promise<ClaudeStdout> {
+  return { text: await new Response(stdout).text() };
+}
+
+/**
+ * Reads NDJSON as it arrives, hands each line to the sink, and keeps only the
+ * terminal `result` event. Buffering the whole verbose stream to parse it
+ * afterwards is the memory cost transcript capture exists to avoid, and a
+ * killed run would lose every line it had already printed.
+ */
+async function consumeStreamJson(
+  stdout: ReadableStream<Uint8Array>,
+  onStreamEvent: (line: string) => void,
+): Promise<ClaudeStdout> {
+  const decoder = new TextDecoder();
+  let pending = "";
+  let tail = "";
+  let result: ClaudeJsonResult | undefined;
+
+  const handleLine = (line: string): void => {
+    if (line.trim().length === 0) return;
+    onStreamEvent(line);
+    tail = (tail + line + "\n").slice(-STDOUT_TAIL_CHARS);
+    const event = tryParseClaudeJson(line);
+    // Subagents and compaction can emit result-shaped events mid-stream; the
+    // terminal one is last, so the last wins.
+    if (event?.type === "result") result = event;
+  };
+
+  for await (const chunk of stdout) {
+    pending += decoder.decode(chunk, { stream: true });
+    let newline = pending.indexOf("\n");
+    while (newline !== -1) {
+      handleLine(pending.slice(0, newline));
+      pending = pending.slice(newline + 1);
+      newline = pending.indexOf("\n");
+    }
+  }
+  pending += decoder.decode();
+  // A kill mid-line leaves an unterminated fragment. It is not parseable, but
+  // for a token-economics investigation a truncated event is still evidence.
+  if (pending.length > 0) handleLine(pending);
+
+  return { text: tail, result };
+}
+
+function tailForMessage(text: string): string {
+  return text.trim().length === 0 ? "" : ` (last output: ${text.slice(-500)})`;
 }
 
 function tryParseClaudeJson(stdout: string): ClaudeJsonResult | undefined {

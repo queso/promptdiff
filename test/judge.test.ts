@@ -113,7 +113,7 @@ function mockJudgeFactory(calls: RunnerRunOptions[], factoryArgs: unknown[][] = 
     factoryArgs.push([name, options]);
     const runner: Runner = {
       name,
-      capabilities: { sandboxTools: false, skillRegistry: false, images: false },
+      capabilities: { sandboxTools: false, skillRegistry: false, images: false, streamEvents: false },
       async run(runOptions: RunnerRunOptions) {
         calls.push(runOptions);
         const output = runOptions.userPrompt.includes("GARBLE")
@@ -177,7 +177,7 @@ async function expectGateRefusal(tree: JudgeTree, pattern: RegExp): Promise<void
   const armCalls: RunnerRunOptions[] = [];
   const armRunner: Runner = {
     name: "mock",
-    capabilities: { sandboxTools: true, skillRegistry: true, images: false },
+    capabilities: { sandboxTools: true, skillRegistry: true, images: false, streamEvents: false },
     async run(options: RunnerRunOptions) {
       armCalls.push(options);
       return { output: "GOOD out", costUsd: 0.1, turns: 1, durationMs: 5, models: ["sonnet"], raw: {} };
@@ -247,7 +247,7 @@ test("a passing gate lets runCompare proceed; judge verdicts grade runs and judg
 
     const makeArm = (output: string): Runner => ({
       name: "mock",
-      capabilities: { sandboxTools: true, skillRegistry: true, images: false },
+      capabilities: { sandboxTools: true, skillRegistry: true, images: false, streamEvents: false },
       async run() {
         return { output, costUsd: 0.1, turns: 1, durationMs: 5, models: ["sonnet"], raw: {} };
       },
@@ -299,7 +299,7 @@ test("a judge transport failure fails the graded run with the error in the messa
   try {
     setJudgeRunnerFactory(() => ({
       name: "claude-p",
-      capabilities: { sandboxTools: false, skillRegistry: false, images: false },
+      capabilities: { sandboxTools: false, skillRegistry: false, images: false, streamEvents: false },
       async run(): Promise<never> {
         throw new Error("endpoint unreachable");
       },

@@ -236,3 +236,133 @@ test("non-zero exits without a turn-cap subtype still throw", async () => {
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test("buildClaudeArgs switches to stream-json only when a transcript sink is attached", () => {
+  const base = {
+    systemPrompt: "system",
+    systemPromptFile: "/tmp/system.md",
+    userPrompt: "do work",
+    model: "sonnet",
+    cwd: "/tmp/sandbox",
+    addDirs: [],
+    tools: "",
+    timeoutMs: 1_000,
+    maxBudgetUsd: 0.25,
+  };
+
+  expect(buildClaudeArgs(base)).toContain("json");
+  expect(buildClaudeArgs(base)).not.toContain("stream-json");
+  expect(buildClaudeArgs(base)).not.toContain("--verbose");
+
+  const streaming = buildClaudeArgs({ ...base, onStreamEvent: () => {} });
+  const i = streaming.indexOf("--output-format");
+  expect(streaming[i + 1]).toBe("stream-json");
+  // stream-json is rejected under -p without --verbose.
+  expect(streaming).toContain("--verbose");
+});
+
+// Captured shape of a stream-json run: NDJSON events, terminal `result` last.
+const STREAM_EVENTS = [
+  { type: "system", subtype: "init", session_id: "s-1" },
+  { type: "assistant", message: { usage: { input_tokens: 12, cache_read_input_tokens: 9_000 } } },
+  { type: "assistant", message: { usage: { input_tokens: 40, cache_read_input_tokens: 9_400 } } },
+  {
+    type: "result",
+    subtype: "success",
+    result: "done",
+    num_turns: 2,
+    total_cost_usd: 0.03,
+    duration_ms: 4_200,
+    modelUsage: { "claude-sonnet-5": { costUSD: 0.03 } },
+  },
+];
+
+function fakeClaude(dir: string, body: string): string {
+  const bin = join(dir, "fake-claude");
+  writeFileSync(bin, `#!/bin/sh\n${body}\n`, { mode: 0o755 });
+  return bin;
+}
+
+const streamRunOptions = (cwd: string, onStreamEvent: (line: string) => void) => ({
+  systemPrompt: "system",
+  userPrompt: "do work",
+  model: "sonnet",
+  cwd,
+  addDirs: [] as string[],
+  tools: "",
+  timeoutMs: 10_000,
+  maxBudgetUsd: 1,
+  onStreamEvent,
+});
+
+test("stream mode feeds every event to the sink and scores the terminal result event", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "promptdiff-runner-test-"));
+  try {
+    const echoes = STREAM_EVENTS.map((event) => `echo '${JSON.stringify(event)}'`).join("\n");
+    const runner = new ClaudePrintRunner(fakeClaude(dir, echoes));
+
+    const lines: string[] = [];
+    const result = await runner.run(streamRunOptions(dir, (line) => lines.push(line)));
+
+    // Per-turn usage is the whole point: the aggregate result cannot show how
+    // context grew between turn 1 and turn 2.
+    expect(lines).toHaveLength(4);
+    expect(JSON.parse(lines[1] ?? "{}").message.usage.cache_read_input_tokens).toBe(9_000);
+    expect(JSON.parse(lines[2] ?? "{}").message.usage.cache_read_input_tokens).toBe(9_400);
+
+    expect(result.output).toBe("done");
+    expect(result.turns).toBe(2);
+    expect(result.costUsd).toBeCloseTo(0.03);
+    expect(result.models).toEqual(["claude-sonnet-5"]);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("a truncated stream keeps its lines but has no outcome to score", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "promptdiff-runner-test-"));
+  try {
+    // Two whole events then a killed mid-line write: no terminal result event.
+    const body = [
+      `echo '${JSON.stringify(STREAM_EVENTS[0])}'`,
+      `echo '${JSON.stringify(STREAM_EVENTS[1])}'`,
+      `printf '%s' '{"type":"assistant","mess'`,
+    ].join("\n");
+    const runner = new ClaudePrintRunner(fakeClaude(dir, body));
+
+    const lines: string[] = [];
+    await expect(runner.run(streamRunOptions(dir, (line) => lines.push(line)))).rejects.toThrow(
+      "no terminal result event",
+    );
+
+    // "Last line is the result" is not safe, but the partial stream is still
+    // the evidence a token-economics run was after.
+    expect(lines).toHaveLength(3);
+    expect(lines[2]).toBe('{"type":"assistant","mess');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("stream mode decodes turn caps and budget aborts out of NDJSON", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "promptdiff-runner-test-"));
+  try {
+    const capped = fakeClaude(
+      dir,
+      [`echo '${JSON.stringify(STREAM_EVENTS[0])}'`, `echo '${MAX_TURNS_STDOUT}'`, "exit 1"].join("\n"),
+    );
+    const cappedResult = await new ClaudePrintRunner(capped).run(streamRunOptions(dir, () => {}));
+    expect(cappedResult.exhaustedTurns).toBe(true);
+    expect(cappedResult.turns).toBe(25);
+
+    const broke = fakeClaude(
+      dir,
+      [`echo '${JSON.stringify(STREAM_EVENTS[0])}'`, `echo '${BUDGET_ABORT_STDOUT}'`, "exit 1"].join("\n"),
+    );
+    // Whole-stdout JSON.parse fails on NDJSON, which would have made a budget
+    // abort read as a bare exit code again.
+    await expect(new ClaudePrintRunner(broke).run(streamRunOptions(dir, () => {}))).rejects.toThrow("max budget");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

@@ -14,7 +14,7 @@ function makeCountingRunner(): CountingRunner {
   const counts = { baseline: 0, proposed: 0 };
   return {
     name: "mock",
-    capabilities: { sandboxTools: true, skillRegistry: true, images: false },
+    capabilities: { sandboxTools: true, skillRegistry: true, images: false, streamEvents: false },
     counts,
     async run(options: RunnerRunOptions) {
       if (options.systemPrompt.includes("PROPOSED")) {
@@ -190,4 +190,36 @@ test("compare rejects --cache-dir without --cache before doing any work", () => 
   );
   expect(result.exitCode).toBe(2);
   expect(result.stderr.toString()).toContain("--cache-dir requires --cache");
+});
+
+test("a cached baseline arm says it has no transcript to write instead of writing an empty one", async () => {
+  const fixture = makeFixture();
+  try {
+    const cache = { dir: fixture.cacheDir };
+    const transcriptOut = { dir: join(fixture.dir, "transcripts") };
+    // The counting runner stands in for claude-p here: capture demands a
+    // streamEvents runner, which the engine checks before any run.
+    const streamingRunner = (): CountingRunner => {
+      const runner = makeCountingRunner();
+      return { ...runner, capabilities: { ...runner.capabilities, streamEvents: true } };
+    };
+    const first = streamingRunner();
+    await runCompare({ config: fixture.config, runners: { baseline: first, proposed: first }, cache, transcriptOut });
+
+    const progress: string[] = [];
+    const second = streamingRunner();
+    await runCompare({
+      config: fixture.config,
+      runners: { baseline: second, proposed: second },
+      cache,
+      transcriptOut,
+      onProgress: (message) => progress.push(message),
+    });
+
+    // The arm ran in an earlier invocation; capture cannot reach back for it.
+    expect(second.counts.baseline).toBe(0);
+    expect(progress).toContain("  baseline: cache hit — no transcript to write");
+  } finally {
+    rmSync(fixture.dir, { recursive: true, force: true });
+  }
 });

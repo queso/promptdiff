@@ -101,11 +101,11 @@ test("OpenAiCompatRunner surfaces HTTP errors and malformed completions", async 
 test("createRunner builds runners with the right capabilities", () => {
   const claude = createRunner("claude-p");
   expect(claude.name).toBe("claude-p");
-  expect(claude.capabilities).toEqual({ sandboxTools: true, skillRegistry: true, images: false });
+  expect(claude.capabilities).toEqual({ sandboxTools: true, skillRegistry: true, images: false, streamEvents: true });
 
   const openai = createRunner("openai", { baseUrl: "http://localhost:8080/v1" });
   expect(openai.name).toBe("openai");
-  expect(openai.capabilities).toEqual({ sandboxTools: false, skillRegistry: false, images: true });
+  expect(openai.capabilities).toEqual({ sandboxTools: false, skillRegistry: false, images: true, streamEvents: false });
 });
 
 test("buildChatRequest attaches images as data-URI content parts before the text", () => {

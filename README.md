@@ -343,6 +343,32 @@ categories, not the blend. Files are written per run, so a compare that dies
 midway still leaves the completed runs' records. Cache-served baseline arms
 ran in an earlier invocation and write nothing.
 
+### Per-turn transcripts
+
+The raw result is still an aggregate: one `usage` total for the whole run. It
+can tell you a prompt's uncached input stayed small; it cannot tell you how
+context grew between turn 2 and turn 3, or which turn paid for the cache
+write. `--transcript-out <dir>` (on `compare` and `measure`, claude-p only)
+runs claude with `--output-format stream-json --verbose` and writes the full
+event stream as `<scenario>_<arm>_<n>.stream.jsonl`, one JSON event per line:
+
+```bash
+promptdiff compare --scenario ./scenario.json --transcript-out ./transcripts
+
+# per-turn input growth, cache reads, and cache writes for one run
+jq -r 'select(.type == "assistant") | .message.usage
+       | [.input_tokens, .cache_read_input_tokens, .cache_creation_input_tokens] | @tsv' \
+  transcripts/injected-context_proposed_1.stream.jsonl
+```
+
+Lines are written as they arrive, so a run killed by the timeout or a budget
+abort keeps everything it printed up to the kill — for a cost investigation a
+truncated stream is the evidence. The runner still passes
+`--no-session-persistence`: capture replaces the transcript without writing
+anything to `~/.claude/projects`. Stream files are large (every tool result
+and every message block), so the flag is off by default and best pointed at a
+throwaway directory. Cache-served baseline arms write nothing here either.
+
 ### Run history
 
 `--report ndjson --report-out ./runs.ndjson` appends one record per scenario

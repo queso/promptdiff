@@ -15,7 +15,7 @@ function sha256(content: string): string {
 function mockRunner(decide: (options: RunnerRunOptions) => string): Runner {
   return {
     name: "mock",
-    capabilities: { sandboxTools: true, skillRegistry: true, images: false },
+    capabilities: { sandboxTools: true, skillRegistry: true, images: false, streamEvents: false },
     async run(options: RunnerRunOptions) {
       return { output: decide(options), costUsd: 0.1, turns: 1, durationMs: 5, models: ["m"], raw: {} };
     },

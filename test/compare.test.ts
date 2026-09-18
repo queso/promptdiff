@@ -18,7 +18,7 @@ test("runCompare verifies target improvement and regression preservation", async
 
     const runner: Runner = {
       name: "mock",
-      capabilities: { sandboxTools: true, skillRegistry: true, images: false },
+      capabilities: { sandboxTools: true, skillRegistry: true, images: false, streamEvents: false },
       async run(options: RunnerRunOptions) {
         const isProposed = options.systemPrompt.includes("PROPOSED");
         const isRegression = options.userPrompt.includes("regression");
@@ -93,7 +93,7 @@ test("runCompare routes each arm to its own runner and model, and compare kind n
 
     const makeRunner = (name: string, seen: string[], output: string): Runner => ({
       name,
-      capabilities: { sandboxTools: false, skillRegistry: false, images: false },
+      capabilities: { sandboxTools: false, skillRegistry: false, images: false, streamEvents: false },
       async run(options: RunnerRunOptions) {
         seen.push(options.model);
         return { output, costUsd: 0, turns: 1, durationMs: 10, models: [options.model], raw: {} };
@@ -258,7 +258,7 @@ test("a run that exhausted its turn cap fails without grading its partial output
     // Output would satisfy the grader — the cap must fail the run anyway.
     const runner: Runner = {
       name: "mock",
-      capabilities: { sandboxTools: true, skillRegistry: true, images: false },
+      capabilities: { sandboxTools: true, skillRegistry: true, images: false, streamEvents: false },
       async run(options: RunnerRunOptions) {
         expect(options.maxTurns).toBe(7);
         const capped = options.systemPrompt.includes("BASELINE");
@@ -289,7 +289,7 @@ test("rawOut persists each run's full runner result for both compare arms and fo
     const usage = { input_tokens: 100, cache_read_input_tokens: 900, output_tokens: 50 };
     const runner: Runner = {
       name: "mock",
-      capabilities: { sandboxTools: true, skillRegistry: true, images: false },
+      capabilities: { sandboxTools: true, skillRegistry: true, images: false, streamEvents: false },
       async run(options: RunnerRunOptions) {
         const arm = options.systemPrompt.includes("BASELINE") ? "baseline" : "proposed";
         return { output: "ok", costUsd: 0.1, turns: 1, durationMs: 10, models: ["sonnet"], raw: { arm, usage } };
@@ -313,6 +313,98 @@ test("rawOut persists each run's full runner result for both compare arms and fo
     // Without rawOut nothing extra is written.
     const plain = await runCompare({ config, runners: { baseline: runner, proposed: runner } });
     expect(plain.cases[0]?.baseline.passes).toBe(1);
+  } finally {
+    rmSync(fixture.dir, { recursive: true, force: true });
+  }
+});
+
+test("transcriptOut captures each run's event stream, keeping the partial when a run throws", async () => {
+  const fixture = fixtureDir();
+  try {
+    const streamingRunner = (fail: boolean): Runner => ({
+      name: "mock-stream",
+      capabilities: { sandboxTools: true, skillRegistry: true, images: false, streamEvents: true },
+      async run(options: RunnerRunOptions) {
+        const arm = options.systemPrompt.includes("BASELINE") ? "baseline" : "proposed";
+        options.onStreamEvent?.(JSON.stringify({ type: "system", arm }));
+        options.onStreamEvent?.(JSON.stringify({ type: "assistant", usage: { cache_read_input_tokens: 900 } }));
+        if (fail) throw new Error("killed mid-run");
+        options.onStreamEvent?.(JSON.stringify({ type: "result", result: "ok" }));
+        return { output: "ok", costUsd: 0.1, turns: 1, durationMs: 10, models: ["sonnet"], raw: {} };
+      },
+    });
+
+    const config = cappedConfig(fixture);
+    const dir = join(fixture.dir, "transcripts");
+    const runner = streamingRunner(false);
+    await runCompare({ config, runners: { baseline: runner, proposed: runner }, transcriptOut: { dir } });
+
+    // Same naming convention as raw results, one NDJSON line per event.
+    const baselineLines = readFileSync(join(dir, "case-one_baseline_1.stream.jsonl"), "utf8").trim().split("\n");
+    expect(baselineLines).toHaveLength(3);
+    expect(JSON.parse(baselineLines[0] ?? "{}").arm).toBe("baseline");
+    expect(JSON.parse(baselineLines[1] ?? "{}").usage.cache_read_input_tokens).toBe(900);
+    expect(existsSync(join(dir, "case-one_proposed_1.stream.jsonl"))).toBe(true);
+
+    const measureDir = join(fixture.dir, "transcripts-measure");
+    await runMeasure({ config, runner, transcriptOut: { dir: measureDir } });
+    expect(existsSync(join(measureDir, "case-one_measure_1.stream.jsonl"))).toBe(true);
+
+    // A run that dies mid-stream keeps what it printed — that partial record is
+    // what a timeout or a budget abort leaves to investigate.
+    const failedDir = join(fixture.dir, "transcripts-failed");
+    await expect(
+      runMeasure({ config, runner: streamingRunner(true), transcriptOut: { dir: failedDir } }),
+    ).rejects.toThrow("killed mid-run");
+    expect(readFileSync(join(failedDir, "case-one_measure_1.stream.jsonl"), "utf8").trim().split("\n")).toHaveLength(2);
+
+    // Without the flag nothing is captured and no sink reaches the runner.
+    let sinkSeen = true;
+    await runMeasure({
+      config,
+      runner: {
+        name: "mock",
+        capabilities: { sandboxTools: true, skillRegistry: true, images: false, streamEvents: true },
+        async run(options: RunnerRunOptions) {
+          sinkSeen = options.onStreamEvent !== undefined;
+          return { output: "ok", costUsd: 0, turns: 1, durationMs: 1, models: [], raw: {} };
+        },
+      },
+    });
+    expect(sinkSeen).toBe(false);
+  } finally {
+    rmSync(fixture.dir, { recursive: true, force: true });
+  }
+});
+
+test("transcriptOut is refused before any paid run when the runner cannot stream events", async () => {
+  const fixture = fixtureDir();
+  try {
+    let ran = false;
+    const runner: Runner = {
+      name: "openai",
+      capabilities: { sandboxTools: true, skillRegistry: true, images: false, streamEvents: false },
+      async run() {
+        ran = true;
+        return { output: "ok", costUsd: 0.1, turns: 1, durationMs: 10, models: [], raw: {} };
+      },
+    };
+
+    const config = cappedConfig(fixture);
+    // Empty transcript files would misrepresent a runner that simply cannot
+    // produce one, so this fails loudly instead.
+    await expect(
+      runCompare({
+        config,
+        runners: { baseline: runner, proposed: runner },
+        transcriptOut: { dir: join(fixture.dir, "transcripts") },
+      }),
+    ).rejects.toThrow('runner "openai" does not');
+    expect(ran).toBe(false);
+
+    // The same config without the flag still runs on that runner.
+    const summary = await runCompare({ config, runners: { baseline: runner, proposed: runner } });
+    expect(summary.cases[0]?.baseline.passes).toBe(1);
   } finally {
     rmSync(fixture.dir, { recursive: true, force: true });
   }

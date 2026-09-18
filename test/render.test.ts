@@ -141,7 +141,7 @@ test("runCompare renders per-case vars into both arms and fails unbound before a
     const seenPrompts: Array<{ system: string; user: string }> = [];
     const runner: Runner = {
       name: "mock",
-      capabilities: { sandboxTools: true, skillRegistry: true, images: false },
+      capabilities: { sandboxTools: true, skillRegistry: true, images: false, streamEvents: false },
       async run(options: RunnerRunOptions) {
         seenPrompts.push({ system: options.systemPrompt, user: options.userPrompt });
         return { output: "ok", costUsd: 0, turns: 1, durationMs: 1, models: ["m"], raw: {} };

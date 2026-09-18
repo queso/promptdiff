@@ -194,7 +194,11 @@ state. `--raw-out <dir>` (compare and measure) additionally writes each run's
 full runner result JSON — token usage categories, modelUsage, subtype — one
 file per completed run, for token-level analysis that the digested summaries
 cannot support; files land as runs finish, so a partial invocation still
-leaves its completed records.
+leaves its completed records. `--transcript-out <dir>` (compare and
+measure, streamEvents runners only) additionally captures the runner's
+per-event stream as NDJSON, one `<scenario>_<arm>_<n>.stream.jsonl` per run
+written event by event — per-turn usage and tool calls, which the aggregate
+result object cannot carry. A run killed mid-stream keeps its partial file.
 
 `compare` scenarios assert nothing: they exist to report both arms' pass
 rates and the delta, for comparisons (typically model-vs-model) where neither

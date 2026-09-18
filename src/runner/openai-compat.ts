@@ -94,7 +94,7 @@ export function buildChatRequest(options: RunnerRunOptions): ChatRequest {
  */
 export class OpenAiCompatRunner implements Runner {
   readonly name = "openai";
-  readonly capabilities = { sandboxTools: false, skillRegistry: false, images: true };
+  readonly capabilities = { sandboxTools: false, skillRegistry: false, images: true, streamEvents: false };
 
   private readonly baseUrl: string;
   private readonly apiKey: string | undefined;

@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { mkdirSync, writeFileSync } from "node:fs";
+import { closeSync, mkdirSync, openSync, writeFileSync, writeSync } from "node:fs";
 import { join } from "node:path";
 import { assembleSystemPrompt } from "../prompt";
 import type { Runner, RunnerRunOptions, RunResult } from "../types";
@@ -68,14 +68,21 @@ export interface CompareRunOptions {
    * nothing here.
    */
   rawOut?: { dir: string };
+  /**
+   * Opt-in per-run transcript capture: the runner's full event stream is
+   * written to this directory as NDJSON while the run is in flight. Needs a
+   * streamEvents runner. Cache-served baseline arms write nothing here.
+   */
+  transcriptOut?: { dir: string };
 }
 
 export async function runCompare(options: CompareRunOptions): Promise<CompareSummary> {
-  const { config, runners, onProgress, cache, rawOut } = options;
+  const { config, runners, onProgress, cache, rawOut, transcriptOut } = options;
   // Validate each arm against its own runner — a mixed comparison fails on the
   // violating arm before either arm's paid runs.
-  validateRunnerSupport(config, runners.baseline);
-  validateRunnerSupport(config, runners.proposed);
+  const transcripts = transcriptOut !== undefined;
+  validateRunnerSupport(config, runners.baseline, { transcripts });
+  validateRunnerSupport(config, runners.proposed, { transcripts });
   assertJudgeGradersCalibrated(config);
   // Install delivery keeps skill text out of the system prompt entirely — the
   // arms differ only by which skill directory lands in the sandbox registry.
@@ -89,8 +96,8 @@ export async function runCompare(options: CompareRunOptions): Promise<CompareSum
 
   for (const { evalCase, baselineSystem, proposedSystem } of renderedCases) {
     onProgress?.(`scenario ${evalCase.name} (${evalCase.kind})`);
-    const baseline = await runBaselineArm(config, evalCase, baselineSystem, runners.baseline, cache, onProgress, rawOut);
-    const proposed = await runArm(config, evalCase, "proposed", proposedSystem, runners.proposed, onProgress, "proposed", rawOut);
+    const baseline = await runBaselineArm(config, evalCase, baselineSystem, runners.baseline, cache, onProgress, rawOut, transcriptOut);
+    const proposed = await runArm(config, evalCase, "proposed", proposedSystem, runners.proposed, onProgress, "proposed", rawOut, transcriptOut);
     cases.push({
       name: evalCase.name,
       kind: evalCase.kind,
@@ -242,7 +249,16 @@ function assertJudgeGradersCalibrated(config: CompareConfig): void {
  * Rejects scenario demands the runner cannot honor — before any paid run,
  * instead of mid-comparison or (worse) via a silently tool-less arm.
  */
-export function validateRunnerSupport(config: CompareConfig, runner: Runner): void {
+export function validateRunnerSupport(
+  config: CompareConfig,
+  runner: Runner,
+  demands: { transcripts?: boolean } = {},
+): void {
+  if (demands.transcripts && !runner.capabilities.streamEvents) {
+    throw new Error(
+      `transcript capture needs a runner that emits a per-event stream; runner "${runner.name}" does not (use claude-p)`,
+    );
+  }
   if (config.delivery === "install" && !runner.capabilities.skillRegistry) {
     throw new Error(
       `delivery "install" needs a runner with a skill registry; runner "${runner.name}" has none (use claude-p)`,
@@ -288,6 +304,8 @@ export interface MeasureRunOptions {
   onProgress?: (message: string) => void;
   /** Opt-in per-run raw persistence; see CompareRunOptions.rawOut. */
   rawOut?: { dir: string };
+  /** Opt-in per-run transcript capture; see CompareRunOptions.transcriptOut. */
+  transcriptOut?: { dir: string };
 }
 
 /**
@@ -297,8 +315,8 @@ export interface MeasureRunOptions {
  * nonsense verdicts from sampling noise.
  */
 export async function runMeasure(options: MeasureRunOptions): Promise<MeasureSummary> {
-  const { config, runner, onProgress, rawOut } = options;
-  validateRunnerSupport(config, runner);
+  const { config, runner, onProgress, rawOut, transcriptOut } = options;
+  validateRunnerSupport(config, runner, { transcripts: transcriptOut !== undefined });
   assertJudgeGradersCalibrated(config);
   const inline = config.delivery !== "install";
   const basePrompt = assembleSystemPrompt(config.agent, inline ? config.baselineSkills : []);
@@ -315,7 +333,7 @@ export async function runMeasure(options: MeasureRunOptions): Promise<MeasureSum
   const cases: MeasureCaseSummary[] = [];
   for (const { evalCase, systemPrompt } of rendered) {
     onProgress?.(`scenario ${evalCase.name}`);
-    const result = await runArm(config, evalCase, "baseline", systemPrompt, runner, onProgress, "measure", rawOut);
+    const result = await runArm(config, evalCase, "baseline", systemPrompt, runner, onProgress, "measure", rawOut, transcriptOut);
     cases.push({ name: evalCase.name, kind: evalCase.kind, result, promptSha256: sha256(systemPrompt) });
   }
 
@@ -397,9 +415,10 @@ async function runBaselineArm(
   cache: { dir: string } | undefined,
   onProgress?: (message: string) => void,
   rawOut?: { dir: string },
+  transcriptOut?: { dir: string },
 ): Promise<ArmSummary> {
   if (cache === undefined) {
-    return runArm(config, evalCase, "baseline", systemPrompt, runner, onProgress, "baseline", rawOut);
+    return runArm(config, evalCase, "baseline", systemPrompt, runner, onProgress, "baseline", rawOut, transcriptOut);
   }
   const key = buildCacheKey({
     systemPrompt,
@@ -421,9 +440,12 @@ async function runBaselineArm(
     if (rawOut !== undefined) {
       onProgress?.("  baseline: cache hit — no raw results to write");
     }
+    if (transcriptOut !== undefined) {
+      onProgress?.("  baseline: cache hit — no transcript to write");
+    }
     return { ...hit, cached: true };
   }
-  const summary = await runArm(config, evalCase, "baseline", systemPrompt, runner, onProgress, "baseline", rawOut);
+  const summary = await runArm(config, evalCase, "baseline", systemPrompt, runner, onProgress, "baseline", rawOut, transcriptOut);
   storeCachedArm(cache.dir, key, summary);
   return summary;
 }
@@ -437,6 +459,7 @@ async function runArm(
   onProgress?: (message: string) => void,
   label: string = arm,
   rawOut?: { dir: string },
+  transcriptOut?: { dir: string },
 ): Promise<ArmSummary> {
   const runs = evalCase.runs ?? config.runs;
   const summaries: ArmRunSummary[] = [];
@@ -450,6 +473,11 @@ async function runArm(
       keep: config.keepSandbox,
     });
 
+    // Opened before the run so a timeout kill still leaves the lines the run
+    // did print — a partial stream is the evidence, not garbage to discard.
+    const transcript =
+      transcriptOut === undefined ? undefined : openTranscript(transcriptOut.dir, evalCase.name, label, index + 1);
+
     try {
       onProgress?.(`  ${label} run ${index + 1}/${runs}`);
       if (config.delivery === "install") {
@@ -461,7 +489,9 @@ async function runArm(
           }
         }
       }
-      const run = await runner.run(buildRunnerOptions(config, evalCase, arm, systemPrompt, sandbox.dir));
+      const run = await runner.run(
+        buildRunnerOptions(config, evalCase, arm, systemPrompt, sandbox.dir, transcript?.write),
+      );
       if (rawOut !== undefined) {
         writeRawResult(rawOut.dir, evalCase.name, label, index + 1, run.raw);
       }
@@ -478,6 +508,7 @@ async function runArm(
           });
       summaries.push(toArmRunSummary(index + 1, run, grade, sandbox.dir));
     } finally {
+      transcript?.close();
       sandbox.cleanup();
     }
   }
@@ -500,6 +531,7 @@ function buildRunnerOptions(
   arm: "baseline" | "proposed",
   systemPrompt: string,
   cwd: string,
+  onStreamEvent?: (line: string) => void,
 ): RunnerRunOptions {
   return {
     systemPrompt,
@@ -514,6 +546,7 @@ function buildRunnerOptions(
     timeoutMs: config.timeoutMs,
     maxBudgetUsd: config.maxBudgetUsd,
     maxTurns: evalCase.maxTurns ?? config.maxTurns,
+    ...(onStreamEvent === undefined ? {} : { onStreamEvent }),
   };
 }
 
@@ -525,8 +558,40 @@ function buildRunnerOptions(
  */
 function writeRawResult(dir: string, caseName: string, label: string, runNumber: number, raw: unknown): void {
   mkdirSync(dir, { recursive: true });
+  writeFileSync(join(dir, `${runFileStem(caseName, label, runNumber)}.json`), JSON.stringify(raw, null, 2) + "\n", "utf8");
+}
+
+interface TranscriptSink {
+  /** Appends one NDJSON event line; a no-op once the file is closed. */
+  write: (line: string) => void;
+  close: () => void;
+}
+
+/**
+ * One NDJSON file per run, written event by event. The runner emits lines and
+ * never learns what a scenario is; naming and the keep-the-partial policy live
+ * here, next to raw persistence, so both answer to one convention.
+ */
+function openTranscript(dir: string, caseName: string, label: string, runNumber: number): TranscriptSink {
+  mkdirSync(dir, { recursive: true });
+  const fd = openSync(join(dir, `${runFileStem(caseName, label, runNumber)}.stream.jsonl`), "w");
+  let open = true;
+  return {
+    write(line: string): void {
+      if (!open) return;
+      writeSync(fd, line.endsWith("\n") ? line : `${line}\n`);
+    },
+    close(): void {
+      if (!open) return;
+      open = false;
+      closeSync(fd);
+    },
+  };
+}
+
+function runFileStem(caseName: string, label: string, runNumber: number): string {
   const safeCase = caseName.toLowerCase().replace(/[^a-z0-9_-]+/g, "-").replace(/^-+|-+$/g, "") || "scenario";
-  writeFileSync(join(dir, `${safeCase}_${label}_${runNumber}.json`), JSON.stringify(raw, null, 2) + "\n", "utf8");
+  return `${safeCase}_${label}_${runNumber}`;
 }
 
 function effectiveTools(config: CompareConfig, evalCase: EvalCaseConfig): string {
