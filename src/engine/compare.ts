@@ -258,9 +258,12 @@ export function validateRunnerSupport(
   runner: Runner,
   demands: { transcripts?: boolean } = {},
 ): void {
+  // Deliberately ahead of any cache lookup: knowing an arm would be fully
+  // cache-served means computing its key, which validation has no business doing.
   if (demands.transcripts && !runner.capabilities.streamEvents) {
     throw new Error(
-      `transcript capture needs a runner that emits a per-event stream; runner "${runner.name}" does not (use claude-p)`,
+      `transcript capture needs a runner that emits a per-event stream; runner "${runner.name}" does not (use claude-p). ` +
+        `The check runs before any cache lookup, so it applies even to an arm that would be served from cache.`,
     );
   }
   if (config.delivery === "install" && !runner.capabilities.skillRegistry) {
