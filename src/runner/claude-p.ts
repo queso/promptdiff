@@ -245,6 +245,11 @@ async function consumeStreamJson(
     // found (that's why the previous iteration's while loop exited) — only
     // the newly appended bytes need to be searched. Once a line is sliced
     // off below, the remaining buffer is unscanned from its own start 0.
+    // Accumulating into a string looks quadratic and measures linear: the
+    // engine ropes the `+=` instead of copying, and this offset keeps the
+    // scan off old bytes. A 16MB single line costs ~3ms, a 4MB one under 1ms,
+    // so a byte-buffer rewrite would add UTF-8 boundary handling here for no
+    // gain worth having.
     const scanned = pending.length;
     pending += decoder.decode(chunk, { stream: true });
     let newline = pending.indexOf("\n", scanned);
