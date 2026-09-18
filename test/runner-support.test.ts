@@ -5,7 +5,7 @@ import type { Runner } from "../src/types";
 
 const textOnlyRunner: Runner = {
   name: "openai",
-  capabilities: { sandboxTools: false, skillRegistry: false, images: true },
+  capabilities: { sandboxTools: false, skillRegistry: false, images: true, streamEvents: false },
   async run() {
     throw new Error("unused");
   },
@@ -56,7 +56,7 @@ test("install delivery is rejected on a runner without a skill registry", () => 
 test("mixed arms validate per arm: the openai arm rejects command graders, text graders pass both", () => {
   const toolRunner: Runner = {
     name: "claude-p",
-    capabilities: { sandboxTools: true, skillRegistry: true, images: false },
+    capabilities: { sandboxTools: true, skillRegistry: true, images: false, streamEvents: false },
     async run() {
       throw new Error("unused");
     },

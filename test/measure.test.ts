@@ -11,7 +11,7 @@ function mockRunner(outputs: string[]): { runner: Runner; seen: RunnerRunOptions
   let call = 0;
   const runner: Runner = {
     name: "mock",
-    capabilities: { sandboxTools: true, skillRegistry: true, images: false },
+    capabilities: { sandboxTools: true, skillRegistry: true, images: false, streamEvents: false },
     async run(options: RunnerRunOptions) {
       seen.push(options);
       const output = outputs[call % outputs.length];

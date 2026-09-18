@@ -236,3 +236,320 @@ test("non-zero exits without a turn-cap subtype still throw", async () => {
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test("buildClaudeArgs switches to stream-json only when a transcript sink is attached", () => {
+  const base = {
+    systemPrompt: "system",
+    systemPromptFile: "/tmp/system.md",
+    userPrompt: "do work",
+    model: "sonnet",
+    cwd: "/tmp/sandbox",
+    addDirs: [],
+    tools: "",
+    timeoutMs: 1_000,
+    maxBudgetUsd: 0.25,
+  };
+
+  expect(buildClaudeArgs(base)).toContain("json");
+  expect(buildClaudeArgs(base)).not.toContain("stream-json");
+  expect(buildClaudeArgs(base)).not.toContain("--verbose");
+
+  const streaming = buildClaudeArgs({ ...base, onStreamEvent: () => {} });
+  const i = streaming.indexOf("--output-format");
+  expect(streaming[i + 1]).toBe("stream-json");
+  // stream-json is rejected under -p without --verbose.
+  expect(streaming).toContain("--verbose");
+});
+
+// Captured shape of a stream-json run: NDJSON events, terminal `result` last.
+const STREAM_EVENTS = [
+  { type: "system", subtype: "init", session_id: "s-1" },
+  { type: "assistant", message: { usage: { input_tokens: 12, cache_read_input_tokens: 9_000 } } },
+  { type: "assistant", message: { usage: { input_tokens: 40, cache_read_input_tokens: 9_400 } } },
+  {
+    type: "result",
+    subtype: "success",
+    result: "done",
+    num_turns: 2,
+    total_cost_usd: 0.03,
+    duration_ms: 4_200,
+    modelUsage: { "claude-sonnet-5": { costUSD: 0.03 } },
+  },
+];
+
+function fakeClaude(dir: string, body: string): string {
+  const bin = join(dir, "fake-claude");
+  writeFileSync(bin, `#!/bin/sh\n${body}\n`, { mode: 0o755 });
+  return bin;
+}
+
+const streamRunOptions = (cwd: string, onStreamEvent: (line: string) => void) => ({
+  systemPrompt: "system",
+  userPrompt: "do work",
+  model: "sonnet",
+  cwd,
+  addDirs: [] as string[],
+  tools: "",
+  timeoutMs: 10_000,
+  maxBudgetUsd: 1,
+  onStreamEvent,
+});
+
+test("stream mode feeds every event to the sink and scores the terminal result event", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "promptdiff-runner-test-"));
+  try {
+    const echoes = STREAM_EVENTS.map((event) => `echo '${JSON.stringify(event)}'`).join("\n");
+    const runner = new ClaudePrintRunner(fakeClaude(dir, echoes));
+
+    const lines: string[] = [];
+    const result = await runner.run(streamRunOptions(dir, (line) => lines.push(line)));
+
+    // Per-turn usage is the whole point: the aggregate result cannot show how
+    // context grew between turn 1 and turn 2.
+    expect(lines).toHaveLength(4);
+    expect(JSON.parse(lines[1] ?? "{}").message.usage.cache_read_input_tokens).toBe(9_000);
+    expect(JSON.parse(lines[2] ?? "{}").message.usage.cache_read_input_tokens).toBe(9_400);
+
+    expect(result.output).toBe("done");
+    expect(result.turns).toBe(2);
+    expect(result.costUsd).toBeCloseTo(0.03);
+    expect(result.models).toEqual(["claude-sonnet-5"]);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("a truncated stream keeps its lines but has no outcome to score", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "promptdiff-runner-test-"));
+  try {
+    // Two whole events then a killed mid-line write: no terminal result event.
+    const body = [
+      `echo '${JSON.stringify(STREAM_EVENTS[0])}'`,
+      `echo '${JSON.stringify(STREAM_EVENTS[1])}'`,
+      `printf '%s' '{"type":"assistant","mess'`,
+    ].join("\n");
+    const runner = new ClaudePrintRunner(fakeClaude(dir, body));
+
+    const lines: string[] = [];
+    await expect(runner.run(streamRunOptions(dir, (line) => lines.push(line)))).rejects.toThrow(
+      "no terminal result event",
+    );
+
+    // "Last line is the result" is not safe, but the partial stream is still
+    // the evidence a token-economics run was after.
+    expect(lines).toHaveLength(3);
+    expect(lines[2]).toBe('{"type":"assistant","mess');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// A result-shaped event that is NOT the real terminal one, the kind a
+// subagent or compaction can emit mid-stream. Its "result" text is
+// distinctive so a test would notice if it were ever scored as the outcome.
+const MID_STREAM_RESULT_EVENT = {
+  type: "result",
+  subtype: "success",
+  result: "mid-stream, not the real outcome",
+  num_turns: 1,
+  total_cost_usd: 0.01,
+};
+
+test("a mid-stream result event is not scored as the outcome when the run then exits non-zero", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "promptdiff-runner-test-"));
+  try {
+    // A result event fires mid-stream, then the process dies (exit 1) without
+    // ever emitting the real terminal event. A result event is only trusted
+    // as terminal when the process also exited cleanly, so this must reject
+    // rather than return MID_STREAM_RESULT_EVENT as a scored success.
+    const body = [
+      `echo '${JSON.stringify(STREAM_EVENTS[0])}'`,
+      `echo '${JSON.stringify(MID_STREAM_RESULT_EVENT)}'`,
+      "exit 1",
+    ].join("\n");
+    const runner = new ClaudePrintRunner(fakeClaude(dir, body));
+
+    const lines: string[] = [];
+    await expect(runner.run(streamRunOptions(dir, (line) => lines.push(line)))).rejects.toThrow(/claude exited 1/);
+
+    // The partial stream is still evidence even though the run is scored as a failure.
+    expect(lines).toHaveLength(2);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("a mid-stream result event is not scored as the outcome when the run is then killed by a signal", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "promptdiff-runner-test-"));
+  try {
+    // Same scenario, but the process dies from a signal (as the timeout path's
+    // SIGTERM/SIGKILL would deliver) instead of a self-chosen exit code. A
+    // signaled process does not exit 0, so this must reject too.
+    const body = [
+      `echo '${JSON.stringify(STREAM_EVENTS[0])}'`,
+      `echo '${JSON.stringify(MID_STREAM_RESULT_EVENT)}'`,
+      "kill -TERM $$",
+    ].join("\n");
+    const runner = new ClaudePrintRunner(fakeClaude(dir, body));
+
+    const lines: string[] = [];
+    await expect(runner.run(streamRunOptions(dir, (line) => lines.push(line)))).rejects.toThrow(/claude exited/);
+
+    expect(lines).toHaveLength(2);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("the last result event wins when the run exits cleanly", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "promptdiff-runner-test-"));
+  try {
+    // A result event fires mid-stream, then the real terminal result event
+    // follows, and the process exits 0. The mid-stream event must not win
+    // just because it arrived first — only the last one is the outcome.
+    const body = [
+      `echo '${JSON.stringify(STREAM_EVENTS[0])}'`,
+      `echo '${JSON.stringify(MID_STREAM_RESULT_EVENT)}'`,
+      `echo '${JSON.stringify(STREAM_EVENTS[3])}'`,
+    ].join("\n");
+    const runner = new ClaudePrintRunner(fakeClaude(dir, body));
+
+    const lines: string[] = [];
+    const result = await runner.run(streamRunOptions(dir, (line) => lines.push(line)));
+
+    expect(lines).toHaveLength(3);
+    expect(result.output).toBe("done");
+    expect(result.turns).toBe(2);
+    expect(result.costUsd).toBeCloseTo(0.03);
+    expect(result.output).not.toBe(MID_STREAM_RESULT_EVENT.result);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("a mid-stream result event is not scored as the outcome when the run then exits cleanly with no real terminal event", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "promptdiff-runner-test-"));
+  try {
+    // A result event fires mid-stream, another event follows it, and then the
+    // process exits 0 without ever emitting a real terminal result event.
+    // Claude exiting 0 normally means the run finished cleanly on its result
+    // event, so this combination is self-contradictory — it must reject
+    // rather than score MID_STREAM_RESULT_EVENT as the outcome.
+    const body = [
+      `echo '${JSON.stringify(STREAM_EVENTS[0])}'`,
+      `echo '${JSON.stringify(MID_STREAM_RESULT_EVENT)}'`,
+      `echo '${JSON.stringify(STREAM_EVENTS[1])}'`,
+    ].join("\n");
+    const runner = new ClaudePrintRunner(fakeClaude(dir, body));
+
+    const lines: string[] = [];
+    // A distinct message from the truncated-stream case: a result event was
+    // produced here, it just was not last, and someone reading the failure
+    // should not go looking for a missing event.
+    await expect(runner.run(streamRunOptions(dir, (line) => lines.push(line)))).rejects.toThrow(
+      /result event before the end of the stream/,
+    );
+
+    // The printed lines are still evidence even though the run has no outcome to score.
+    expect(lines).toHaveLength(3);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("stream mode decodes turn caps and budget aborts out of NDJSON", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "promptdiff-runner-test-"));
+  try {
+    const capped = fakeClaude(
+      dir,
+      [`echo '${JSON.stringify(STREAM_EVENTS[0])}'`, `echo '${MAX_TURNS_STDOUT}'`, "exit 1"].join("\n"),
+    );
+    const cappedResult = await new ClaudePrintRunner(capped).run(streamRunOptions(dir, () => {}));
+    expect(cappedResult.exhaustedTurns).toBe(true);
+    expect(cappedResult.turns).toBe(25);
+
+    const broke = fakeClaude(
+      dir,
+      [`echo '${JSON.stringify(STREAM_EVENTS[0])}'`, `echo '${BUDGET_ABORT_STDOUT}'`, "exit 1"].join("\n"),
+    );
+    // Whole-stdout JSON.parse fails on NDJSON, which would have made a budget
+    // abort read as a bare exit code again.
+    await expect(new ClaudePrintRunner(broke).run(streamRunOptions(dir, () => {}))).rejects.toThrow("max budget");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("a mid-stream turn-cap event followed by more stream and a crash is not scored as exhaustedTurns", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "promptdiff-runner-test-"));
+  try {
+    // MAX_TURNS_STDOUT fires mid-stream (not as the last line), another event
+    // follows it, and then the process exits non-zero without ever emitting a
+    // real terminal result. The run must be reported as a failure — scoring it
+    // as exhaustedTurns would corrupt the measurement by turning a crash into
+    // a counted, "completed" data point.
+    const body = [
+      `echo '${JSON.stringify(STREAM_EVENTS[0])}'`,
+      `echo '${MAX_TURNS_STDOUT}'`,
+      `echo '${JSON.stringify(STREAM_EVENTS[1])}'`,
+      "exit 1",
+    ].join("\n");
+    const runner = new ClaudePrintRunner(fakeClaude(dir, body));
+
+    const lines: string[] = [];
+    await expect(runner.run(streamRunOptions(dir, (line) => lines.push(line)))).rejects.toThrow(/claude exited 1/);
+
+    expect(lines).toHaveLength(3);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("a single event line spanning many stdout chunks is still read whole", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "promptdiff-runner-test-"));
+  try {
+    // A pipe hands back far less than 2MB per read, so a field this large
+    // splits the NDJSON line across many stdout chunks (11 here) — the case
+    // the per-chunk scan-offset arithmetic has to get right. Built with
+    // head/tr rather than an embedded literal: a 2,000,000-character
+    // argument to echo risks blowing past ARG_MAX.
+    const bigFieldChars = 2_000_000;
+    const body = [
+      `echo '${JSON.stringify(STREAM_EVENTS[0])}'`,
+      `printf '%s' '{"type":"assistant","big":"'`,
+      `head -c ${bigFieldChars} /dev/zero | tr '\\0' 'a'`,
+      `printf '"}\\n'`,
+      // A short line after the giant one: if a late chunk happens to land
+      // two newlines at once (the giant line's close plus this line's own),
+      // a stale scan offset would merge them into one garbled line instead
+      // of missing them outright — this line is what would expose that.
+      // It comes before the terminal result event (not after): a result
+      // event only counts as the run's outcome when it is the last line the
+      // stream produced, so this line has to sit ahead of it, not behind it.
+      `echo '${JSON.stringify(STREAM_EVENTS[1])}'`,
+      `echo '${JSON.stringify(STREAM_EVENTS[3])}'`,
+    ].join("\n");
+    const runner = new ClaudePrintRunner(fakeClaude(dir, body));
+
+    const lines: string[] = [];
+    const result = await runner.run(streamRunOptions(dir, (line) => lines.push(line)));
+
+    // Exactly the four lines the script printed: init, the giant line, the
+    // short line, and the terminal result — a dropped, duplicated, or
+    // merged newline boundary would show up here as the wrong count.
+    expect(lines).toHaveLength(4);
+
+    const big = JSON.parse(lines[1] ?? "{}") as { big: string };
+    expect(big.big).toHaveLength(bigFieldChars);
+    expect(big.big).toBe("a".repeat(bigFieldChars));
+
+    const trailing = JSON.parse(lines[2] ?? "{}") as { message: { usage: { cache_read_input_tokens: number } } };
+    expect(trailing.message.usage.cache_read_input_tokens).toBe(9_000);
+
+    expect(result.output).toBe("done");
+    expect(result.turns).toBe(2);
+    expect(result.costUsd).toBeCloseTo(0.03);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

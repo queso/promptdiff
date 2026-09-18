@@ -14,7 +14,7 @@ function makeCountingRunner(): CountingRunner {
   const counts = { baseline: 0, proposed: 0 };
   return {
     name: "mock",
-    capabilities: { sandboxTools: true, skillRegistry: true, images: false },
+    capabilities: { sandboxTools: true, skillRegistry: true, images: false, streamEvents: false },
     counts,
     async run(options: RunnerRunOptions) {
       if (options.systemPrompt.includes("PROPOSED")) {
@@ -190,4 +190,55 @@ test("compare rejects --cache-dir without --cache before doing any work", () => 
   );
   expect(result.exitCode).toBe(2);
   expect(result.stderr.toString()).toContain("--cache-dir requires --cache");
+});
+
+test("a cached baseline arm says it has no transcript to write instead of writing an empty one", async () => {
+  const fixture = makeFixture();
+  try {
+    const cache = { dir: fixture.cacheDir };
+    // The counting runner stands in for claude-p here: capture demands a
+    // streamEvents runner, which the engine checks before any run.
+    const streamingRunner = (): CountingRunner => {
+      const runner = makeCountingRunner();
+      return { ...runner, capabilities: { ...runner.capabilities, streamEvents: true } };
+    };
+    const first = streamingRunner();
+    const firstTranscriptOut = { dir: join(fixture.dir, "transcripts-1") };
+    await runCompare({
+      config: fixture.config,
+      runners: { baseline: first, proposed: first },
+      cache,
+      transcriptOut: firstTranscriptOut,
+    });
+    // Sanity check on the harness itself: a genuine (cache-miss) baseline run
+    // does open transcript files, so the second run's directory is a fair test.
+    expect(readdirSync(firstTranscriptOut.dir).some((name) => name.includes("_baseline_"))).toBe(true);
+
+    // A fresh directory per run makes "no baseline file was created" directly
+    // assertable, rather than inferring it from mtimes on a shared directory
+    // that the proposed arm (never cached) also writes into on every run.
+    const progress: string[] = [];
+    const second = streamingRunner();
+    const secondTranscriptOut = { dir: join(fixture.dir, "transcripts-2") };
+    await runCompare({
+      config: fixture.config,
+      runners: { baseline: second, proposed: second },
+      cache,
+      transcriptOut: secondTranscriptOut,
+      onProgress: (message) => progress.push(message),
+    });
+
+    // The arm ran in an earlier invocation; capture cannot reach back for it.
+    expect(second.counts.baseline).toBe(0);
+    expect(progress).toContain("  baseline: cache hit — no transcript to write");
+    // The actual invariant the test name promises: a cache-served baseline
+    // opens no transcript file at all, empty or otherwise. The proposed arm
+    // (not cached) still writes its own, which also proves transcript capture
+    // was live for this run and not just skipped wholesale.
+    const secondRunFiles = readdirSync(secondTranscriptOut.dir);
+    expect(secondRunFiles.some((name) => name.includes("_baseline_"))).toBe(false);
+    expect(secondRunFiles.some((name) => name.includes("_proposed_"))).toBe(true);
+  } finally {
+    rmSync(fixture.dir, { recursive: true, force: true });
+  }
 });

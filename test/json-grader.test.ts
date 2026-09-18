@@ -209,7 +209,7 @@ test("runCompare grades reasoning prose + trailing JSON with a json grader on a 
     const toolsSeen: string[] = [];
     const runner: Runner = {
       name: "openai",
-      capabilities: { sandboxTools: false, skillRegistry: false, images: false },
+      capabilities: { sandboxTools: false, skillRegistry: false, images: false, streamEvents: false },
       async run(options: RunnerRunOptions) {
         toolsSeen.push(options.tools);
         const isProposed = options.systemPrompt.includes("PROPOSED");

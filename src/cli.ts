@@ -70,6 +70,7 @@ const compareSpecs: FlagSpecs = {
   "report-out": { arity: "one" },
   receipts: { arity: "one" },
   "raw-out": { arity: "one" },
+  "transcript-out": { arity: "one" },
   cache: { arity: "none" },
   "cache-dir": { arity: "one" },
 };
@@ -241,6 +242,7 @@ const measureSpecs: FlagSpecs = {
   "keep-sandbox": { arity: "none" },
   receipts: { arity: "one" },
   "raw-out": { arity: "one" },
+  "transcript-out": { arity: "one" },
 };
 
 async function cmdMeasure(argv: string[]): Promise<void> {
@@ -272,12 +274,14 @@ async function cmdMeasure(argv: string[]): Promise<void> {
   };
 
   const rawOutDir = args.one("raw-out");
+  const transcriptOutDir = args.one("transcript-out");
   const config = loadCompareConfig(scenario, overrides, { singleArm: true });
   const summary = await runMeasure({
     config,
     runner: armRunner(config.arms.baseline, config),
     onProgress: (message) => console.error(`[promptdiff] ${message}`),
     rawOut: rawOutDir === undefined ? undefined : { dir: rawOutDir },
+    transcriptOut: transcriptOutDir === undefined ? undefined : { dir: transcriptOutDir },
   });
 
   const receiptsDir = args.one("receipts");
@@ -369,6 +373,7 @@ async function cmdCompare(argv: string[]): Promise<number> {
   };
 
   const rawOutDir = args.one("raw-out");
+  const transcriptOutDir = args.one("transcript-out");
   const config = loadCompareConfig(scenario, overrides);
   const summary = await runCompare({
     config,
@@ -379,6 +384,7 @@ async function cmdCompare(argv: string[]): Promise<number> {
     onProgress: (message) => console.error(`[promptdiff] ${message}`),
     cache,
     rawOut: rawOutDir === undefined ? undefined : { dir: rawOutDir },
+    transcriptOut: transcriptOutDir === undefined ? undefined : { dir: transcriptOutDir },
   });
 
   // History is appended before the exit code is decided — failed comparisons
@@ -545,7 +551,8 @@ function compareUsage(): string {
     "           --mode <text|artifact> --tools <tools|default|''>",
     "           --timeout-ms <ms> --max-budget-usd <usd> --max-turns <n>",
     "           --report ndjson --report-out <file>",
-    "           --raw-out <dir> --cache [--cache-dir <dir>]",
+    "           --raw-out <dir> --transcript-out <dir>",
+    "           --cache [--cache-dir <dir>]",
     "",
     "turn cap:",
     "  --max-turns <n> (or scenario \"maxTurns\", per-case override allowed) caps",
@@ -557,6 +564,14 @@ function compareUsage(): string {
     "  modelUsage, subtype) as <scenario>_<arm>_<n>.json, one file per completed",
     "  run — the token-level record that summaries and reports digest away.",
     "  Cache-served baseline arms ran earlier and write nothing here.",
+    "",
+    "transcripts:",
+    "  --transcript-out <dir> runs claude with --output-format stream-json and",
+    "  writes the full per-event NDJSON as <scenario>_<arm>_<n>.stream.jsonl,",
+    "  one line per event as it arrives — per-turn usage (cache reads, cache",
+    "  creation, context growth) and tool calls, which the aggregate result",
+    "  cannot show. Files are large; a run killed by the timeout keeps the",
+    "  partial stream. claude-p only; cache-served arms write nothing.",
     "",
     "caching:",
     "  --cache reuses recorded baseline-arm results (default dir .promptdiff/cache)",
@@ -664,7 +679,7 @@ function measureUsage(): string {
     "           --mode <text|artifact> --tools <tools|default|''>",
     "           --sandbox <dir> --seed <dir> --keep-sandbox",
     "           --timeout-ms <ms> --max-budget-usd <usd> --max-turns <n>",
-    "           --receipts <dir> --raw-out <dir>",
+    "           --receipts <dir> --raw-out <dir> --transcript-out <dir>",
     "",
     "--receipts <dir> writes one <scenario>.receipt.json per scenario with",
     "per-file prompt hashes and the measured rates (verdict \"measured\").",
@@ -672,6 +687,8 @@ function measureUsage(): string {
     "--max-turns <n> caps agentic turns per run (claude-p); a capped run is",
     "scored as a failure without grading. --raw-out <dir> writes each run's",
     "full runner result JSON (token usage included) as <scenario>_measure_<n>.json.",
+    "--transcript-out <dir> additionally captures the per-event stream-json",
+    "NDJSON as <scenario>_measure_<n>.stream.jsonl (claude-p only, large).",
     "",
     "Exit code is 0 whenever the runs complete — a measurement has no pass/fail.",
   ].join("\n");

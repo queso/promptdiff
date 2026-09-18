@@ -37,6 +37,11 @@ export interface RunnerCapabilities {
    * required for scenarios with `images`.
    */
   images: boolean;
+  /**
+   * The runner can emit its provider's per-event stream to `onStreamEvent` —
+   * required for transcript capture.
+   */
+  streamEvents: boolean;
 }
 
 export interface RunnerRunOptions {
@@ -64,6 +69,13 @@ export interface RunnerRunOptions {
   maxBudgetUsd: number;
   /** Turn cap for agentic runners; completion runners are single-turn and ignore it. */
   maxTurns?: number;
+  /**
+   * Per-event sink for transcript capture: the runner emits one NDJSON line
+   * per provider event and never learns where the lines land. Naming, the
+   * partial-write-on-failure policy, and closing the file are the engine's.
+   * Runners without a streaming mode leave it unused.
+   */
+  onStreamEvent?: (line: string) => void;
 }
 
 export interface Runner {
