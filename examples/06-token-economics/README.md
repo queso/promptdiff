@@ -128,6 +128,15 @@ first tool call, with almost no fresh exploration and no cache built up yet:
   neither was graded — the harness never even looked at whether the model's
   cut-off partial output happened to mention `queue.py`. That's the point:
   a turn-capped run is a measured outcome, not a cheap opportunity to pass.
+- The grader is `{"type": "text", "contains": ["queue.py"]}` — a substring
+  check, so it scores *named the right file*, not *obeyed the format*. Both
+  passing runs put a sentence of reasoning ahead of the filename (visible in
+  the `result` field above) even though the prompt says "Answer with only the
+  filename" and `skill.md` asks for exactly one line, and both still passed
+  2/2. To enforce the format too, swap in a regex grader such as
+  `{"type": "text", "regex": ["^queue\\.py\\s*$"]}` — `gradeText` compiles
+  patterns without the `m` flag, so `^` anchors to the start of the whole
+  output, not to any line in it.
 - Raw files are written as `<scenario>_measure_<n>.json` the moment each run
   finishes, one per run — so `--raw-out` gives per-run granularity that the
   summary's aggregate cost/pass-rate line can't.

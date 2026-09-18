@@ -38,6 +38,8 @@ validation-explanation (target)
   delta: +67% pass | +$0.0000
   PASS: assertions satisfied
   NOTE: delta could be sampling noise (Fisher exact p=0.40) — consider more runs
+  baseline run 2 failed: output did not contain "400"
+  baseline run 3 failed: output did not contain "400"
 
 total cost: $0.0000
 ```
