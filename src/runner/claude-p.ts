@@ -202,8 +202,11 @@ async function consumeStreamJson(
     onStreamEvent(line);
     tail = (tail + line + "\n").slice(-STDOUT_TAIL_CHARS);
     const event = tryParseClaudeJson(line);
-    // Subagents and compaction can emit result-shaped events mid-stream; the
-    // terminal one is last, so the last wins.
+    // The last result event wins when more than one appears. A subagent or
+    // compaction could in principle emit a result-shaped event mid-stream,
+    // and it still cannot be scored as the run's outcome — the success path
+    // trusts out.result only after a clean exit, and a killed or crashed run
+    // exits non-zero into the failure path.
     if (event?.type === "result") result = event;
   };
 

@@ -409,3 +409,37 @@ test("transcriptOut is refused before any paid run when the runner cannot stream
     rmSync(fixture.dir, { recursive: true, force: true });
   }
 });
+
+test("an unwritable transcriptOut dir is refused before any paid run and leaves no sandbox behind", async () => {
+  const fixture = fixtureDir();
+  try {
+    let ran = false;
+    const runner: Runner = {
+      name: "mock-stream",
+      capabilities: { sandboxTools: true, skillRegistry: true, images: false, streamEvents: true },
+      async run() {
+        ran = true;
+        return { output: "ok", costUsd: 0.1, turns: 1, durationMs: 10, models: [], raw: {} };
+      },
+    };
+
+    const config = cappedConfig(fixture);
+    // A regular file where the transcript dir belongs makes mkdirSync throw —
+    // that must surface before scenario 1 ever prepares a sandbox.
+    const blockedPath = join(fixture.dir, "blocked-transcripts");
+    writeFileSync(blockedPath, "not a directory", "utf8");
+
+    await expect(
+      runCompare({
+        config,
+        runners: { baseline: runner, proposed: runner },
+        transcriptOut: { dir: blockedPath },
+      }),
+    ).rejects.toThrow(blockedPath);
+    expect(ran).toBe(false);
+    // Nothing was prepared, so nothing was orphaned.
+    expect(existsSync(config.sandboxRoot)).toBe(false);
+  } finally {
+    rmSync(fixture.dir, { recursive: true, force: true });
+  }
+});

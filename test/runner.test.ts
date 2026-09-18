@@ -344,6 +344,63 @@ test("a truncated stream keeps its lines but has no outcome to score", async () 
   }
 });
 
+// A result-shaped event that is NOT the real terminal one, the kind a
+// subagent or compaction can emit mid-stream. Its "result" text is
+// distinctive so a test would notice if it were ever scored as the outcome.
+const MID_STREAM_RESULT_EVENT = {
+  type: "result",
+  subtype: "success",
+  result: "mid-stream, not the real outcome",
+  num_turns: 1,
+  total_cost_usd: 0.01,
+};
+
+test("a mid-stream result event is not scored as the outcome when the run then exits non-zero", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "promptdiff-runner-test-"));
+  try {
+    // A result event fires mid-stream, then the process dies (exit 1) without
+    // ever emitting the real terminal event. A result event is only trusted
+    // as terminal when the process also exited cleanly, so this must reject
+    // rather than return MID_STREAM_RESULT_EVENT as a scored success.
+    const body = [
+      `echo '${JSON.stringify(STREAM_EVENTS[0])}'`,
+      `echo '${JSON.stringify(MID_STREAM_RESULT_EVENT)}'`,
+      "exit 1",
+    ].join("\n");
+    const runner = new ClaudePrintRunner(fakeClaude(dir, body));
+
+    const lines: string[] = [];
+    await expect(runner.run(streamRunOptions(dir, (line) => lines.push(line)))).rejects.toThrow(/claude exited 1/);
+
+    // The partial stream is still evidence even though the run is scored as a failure.
+    expect(lines).toHaveLength(2);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("a mid-stream result event is not scored as the outcome when the run is then killed by a signal", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "promptdiff-runner-test-"));
+  try {
+    // Same scenario, but the process dies from a signal (as the timeout path's
+    // SIGTERM/SIGKILL would deliver) instead of a self-chosen exit code. A
+    // signaled process does not exit 0, so this must reject too.
+    const body = [
+      `echo '${JSON.stringify(STREAM_EVENTS[0])}'`,
+      `echo '${JSON.stringify(MID_STREAM_RESULT_EVENT)}'`,
+      "kill -TERM $$",
+    ].join("\n");
+    const runner = new ClaudePrintRunner(fakeClaude(dir, body));
+
+    const lines: string[] = [];
+    await expect(runner.run(streamRunOptions(dir, (line) => lines.push(line)))).rejects.toThrow(/claude exited/);
+
+    expect(lines).toHaveLength(2);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test("stream mode decodes turn caps and budget aborts out of NDJSON", async () => {
   const dir = mkdtempSync(join(tmpdir(), "promptdiff-runner-test-"));
   try {

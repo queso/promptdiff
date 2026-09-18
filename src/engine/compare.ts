@@ -84,6 +84,10 @@ export async function runCompare(options: CompareRunOptions): Promise<CompareSum
   validateRunnerSupport(config, runners.baseline, { transcripts });
   validateRunnerSupport(config, runners.proposed, { transcripts });
   assertJudgeGradersCalibrated(config);
+  // An unwritable (or file-blocked) transcript dir must fail here, once, before
+  // scenario 1 prepares a sandbox — not inside runArm, where prepareSandbox has
+  // already run and would otherwise leak an unclosed sandbox directory.
+  if (transcriptOut !== undefined) mkdirSync(transcriptOut.dir, { recursive: true });
   // Install delivery keeps skill text out of the system prompt entirely — the
   // arms differ only by which skill directory lands in the sandbox registry.
   const inline = config.delivery !== "install";
@@ -318,6 +322,8 @@ export async function runMeasure(options: MeasureRunOptions): Promise<MeasureSum
   const { config, runner, onProgress, rawOut, transcriptOut } = options;
   validateRunnerSupport(config, runner, { transcripts: transcriptOut !== undefined });
   assertJudgeGradersCalibrated(config);
+  // Same fail-before-any-paid-run guarantee as runCompare: see the comment there.
+  if (transcriptOut !== undefined) mkdirSync(transcriptOut.dir, { recursive: true });
   const inline = config.delivery !== "install";
   const basePrompt = assembleSystemPrompt(config.agent, inline ? config.baselineSkills : []);
   // Same fail-before-any-paid-run guarantee as compare: render everything first.
@@ -473,12 +479,15 @@ async function runArm(
       keep: config.keepSandbox,
     });
 
-    // Opened before the run so a timeout kill still leaves the lines the run
-    // did print — a partial stream is the evidence, not garbage to discard.
-    const transcript =
-      transcriptOut === undefined ? undefined : openTranscript(transcriptOut.dir, evalCase.name, label, index + 1);
+    let transcript: TranscriptSink | undefined;
 
     try {
+      // Opened inside the try, after the sandbox exists, so the finally below
+      // covers both: a failed open (dir gone unwritable mid-run) and a failed
+      // run leave the sandbox cleaned up. Opened before the run itself so a
+      // timeout kill still leaves the lines the run did print — a partial
+      // stream is the evidence, not garbage to discard.
+      transcript = transcriptOut === undefined ? undefined : openTranscript(transcriptOut.dir, evalCase.name, label, index + 1);
       onProgress?.(`  ${label} run ${index + 1}/${runs}`);
       if (config.delivery === "install") {
         const { installed, warnings } = installSkills(armSkills, sandbox.dir);
