@@ -1,0 +1,18 @@
+{
+  "name": "ticket-field-extraction",
+  "agent": "./agent.md",
+  "skills": ["./skill.md"],
+  "model": "haiku",
+  "runs": 4,
+  "mode": "text",
+  "scenarios": [
+    {
+      "name": "extracts-medium-severity",
+      "prompt": "Subject: Can't export reports since yesterday's update\n\nFrom: Dana Whitfield (dana.whitfield@northfield-labs.com)\n\nSince the update yesterday, exporting reports to CSV just spins forever and never finishes. I've tried three times. Not blocking my day-to-day work since I can still view everything fine in the dashboard, but I do need the CSV before Friday's board meeting.",
+      "grader": {
+        "type": "json",
+        "assert": ["severity == \"Medium\""]
+      }
+    }
+  ]
+}

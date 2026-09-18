@@ -1,0 +1,56 @@
+{
+  "rubricSha256": "2961bc18c8609ddc87610ba39757dd3367c38208b7afba859bfb7a972c318e4d",
+  "model": "haiku",
+  "runner": "claude-p",
+  "ranAt": "2026-08-29T21:27:21.613Z",
+  "fixtures": {
+    "pass": 4,
+    "fail": 4
+  },
+  "accuracy": {
+    "pass": 1,
+    "fail": 1
+  },
+  "verdicts": [
+    {
+      "fixture": "pass/domain-change.md",
+      "expected": "pass",
+      "got": "pass"
+    },
+    {
+      "fixture": "pass/email-missing.md",
+      "expected": "pass",
+      "got": "pass"
+    },
+    {
+      "fixture": "pass/login-locked.md",
+      "expected": "pass",
+      "got": "pass"
+    },
+    {
+      "fixture": "pass/slow-site.md",
+      "expected": "pass",
+      "got": "pass"
+    },
+    {
+      "fixture": "fail/domain-change.md",
+      "expected": "fail",
+      "got": "fail"
+    },
+    {
+      "fixture": "fail/email-missing.md",
+      "expected": "fail",
+      "got": "fail"
+    },
+    {
+      "fixture": "fail/login-locked.md",
+      "expected": "fail",
+      "got": "fail"
+    },
+    {
+      "fixture": "fail/slow-site.md",
+      "expected": "fail",
+      "got": "fail"
+    }
+  ]
+}

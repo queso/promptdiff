@@ -64,6 +64,42 @@ Run from the repo:
 ./promptdiff --help
 ```
 
+## See it work
+
+The smallest possible comparison — the baseline skill is missing one
+instruction, the proposed skill adds it, a text grader catches the effect:
+
+```bash
+./promptdiff compare --scenario ./examples/01-hello-compare/scenario.json
+```
+
+```
+promptdiff compare: hello-compare
+
+answers-with-summary-prefix (target)
+  baseline: 0/2 pass (0%) | $0.0021
+  proposed: 2/2 pass (100%) | $0.0033
+  delta: +100% pass | +$0.0013
+  PASS: assertions satisfied
+  NOTE: delta could be sampling noise (Fisher exact p=0.33) — consider more runs
+  baseline run 1 failed: output did not contain "SUMMARY:"
+  baseline run 2 failed: output did not contain "SUMMARY:"
+
+total cost: $0.0054
+```
+
+That's the full output of a real run (about a cent, ~12 seconds), `NOTE:`
+line included: at `runs: 2` even a clean 0/2 → 2/2 flip can't rule out
+sampling noise, and `compare` says so rather than letting you over-read the
+delta. The [`examples/`](./examples/) directory has six runnable,
+self-contained examples ordered as a learning curve — from this hello case
+through the fix-a-defect-without-regressing loop, measure-first
+characterization, calibrated LLM judges, non-Claude models via ollama, and
+token-level analysis with turn caps — each with its own README, honest cost
+label, and output. That output is captured from a real run in every example
+except `05`, which needs a local ollama server and labels its block
+illustrative.
+
 ## Safe Defaults
 
 Paid model calls are bounded by default:
