@@ -1,5 +1,17 @@
 # Changelog
 
+## [1.2.0](https://github.com/queso/promptdiff/compare/v1.1.0...v1.2.0) (2026-09-18)
+
+
+### Features
+
+* per-turn transcripts (--transcript-out) ([#43](https://github.com/queso/promptdiff/issues/43)) ([e6d00d7](https://github.com/queso/promptdiff/commit/e6d00d71201c3b31349fc156dc82ad5a174a140d)), closes [#39](https://github.com/queso/promptdiff/issues/39)
+
+
+### Documentation
+
+* six runnable examples with captured output ([#40](https://github.com/queso/promptdiff/issues/40)) ([dddd104](https://github.com/queso/promptdiff/commit/dddd104d4b36584e1ec46adb34107a5ec5603798))
+
 ## [1.1.0](https://github.com/queso/promptdiff/compare/v1.0.0...v1.1.0) (2026-08-29)
 
 
