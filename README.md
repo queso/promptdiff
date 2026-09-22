@@ -293,6 +293,13 @@ Create a scenario file:
 
 Paths inside a scenario file are resolved relative to that scenario file.
 
+`baselineSkills` may be `[]`, which compares "no skill" against a proposed
+skill: the question of whether adding the skill changes anything at all. This
+is preferable to pointing baseline at a placeholder skill file, which
+contaminates the baseline arm: its text lands in the system prompt under
+inline delivery, and its description is visible in the registry under install
+delivery.
+
 Run it:
 
 ```bash
