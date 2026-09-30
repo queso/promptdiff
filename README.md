@@ -463,7 +463,8 @@ per-case pass rates, no delta and no assertions:
 
 The scenario file is the compare format — render vars, images, pricing,
 `productionModel`, and both grader types all apply — but only `skills` (or
-`baselineSkills`) is required; no proposed arm. Don't fake this with
+`baselineSkills`) is required; no proposed arm. An explicit `[]` is valid and
+measures the agent with no skills. Don't fake this with
 identical compare arms: two identical arms at small n routinely produce
 verdicts like `FAIL: proposed regressed below baseline` out of pure sampling
 noise. `measure` exits 0 whenever the runs complete — a measurement has no
