@@ -1,5 +1,22 @@
 # Changelog
 
+## [1.3.0](https://github.com/queso/promptdiff/compare/v1.2.0...v1.3.0) (2026-09-30)
+
+
+### Features
+
+* allow an empty baseline skill list ([#44](https://github.com/queso/promptdiff/issues/44)) ([da97f84](https://github.com/queso/promptdiff/commit/da97f84ce1ce6e00b05102f81dd72a92b140e840))
+
+
+### Fixes
+
+* regression on artifact rate; grader files that print while loading ([#47](https://github.com/queso/promptdiff/issues/47)) ([a5d0454](https://github.com/queso/promptdiff/commit/a5d045420a03b330b54e4ec2e6f3577089708abd))
+
+
+### Documentation
+
+* capture example 07 measure output and cost ([#48](https://github.com/queso/promptdiff/issues/48)) ([b76de58](https://github.com/queso/promptdiff/commit/b76de58416e89fd5ee6b9e91e0238a268038ecc4))
+
 ## [1.2.0](https://github.com/queso/promptdiff/compare/v1.1.0...v1.2.0) (2026-09-18)
 
 
