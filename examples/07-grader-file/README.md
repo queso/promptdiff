@@ -28,9 +28,9 @@ The scenario references each grader by name:
 "grader": { "file": "./grade.eval.ts", "name": "lunch-stays-free" }
 ```
 
-**Cost:** free for the grader runs below. The `measure` run (8 haiku runs
-in artifact mode) was not run for this README, so its cost is not measured.
-**Requires:** bun; the claude CLI for `measure`
+**Cost:** free for the grader runs below; ~$0.29 for `measure` (8 haiku
+runs in artifact mode) · **Time:** ~97s for `measure` · **Requires:** bun;
+the claude CLI for `measure`
 
 ## Try the graders without a model run
 
@@ -90,8 +90,21 @@ no artifact: schedule.json does not exist in the grader's working directory
 ./promptdiff measure --scenario ./examples/07-grader-file/scenario.json
 ```
 
-This output was not captured for this README. Each scenario prints a line
-like `3/3 pass (100%), 1 no-artifact`.
+```
+promptdiff measure: day-planner (haiku via claude-p)
+
+no-overlaps
+  4/4 pass (100%) | $0.1570
+
+lunch-stays-free
+  4/4 pass (100%) | $0.1351
+
+total cost: $0.2921
+```
+
+Haiku wrote `schedule.json` in all 8 runs, so no `no-artifact` count
+appears. When a run writes nothing, the line reads
+`3/3 pass (100%), 1 no-artifact` and that run is listed below it.
 
 ## What to notice
 
