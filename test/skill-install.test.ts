@@ -100,6 +100,24 @@ test("installSkills warns when a description exceeds the registry limit", () => 
   }
 });
 
+test("installSkills with an empty list installs nothing and creates no skills directory", () => {
+  const root = mkdtempSync(join(tmpdir(), "skill-install-test-"));
+  try {
+    const sandbox = join(root, "sandbox");
+    mkdirSync(sandbox);
+
+    const result = installSkills([], sandbox, join(root, "no-user-skills"));
+
+    expect(result.installed).toEqual([]);
+    expect(result.warnings).toEqual([]);
+    // An empty baseline arm must leave the registry untouched, not an empty
+    // .claude/skills directory a later check could mistake for "installed but empty".
+    expect(existsSync(join(sandbox, ".claude", "skills"))).toBe(false);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("deliveryValue validates the delivery axis", () => {
   expect(deliveryValue(undefined, "inline")).toBe("inline");
   expect(deliveryValue("install", "inline")).toBe("install");

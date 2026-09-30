@@ -671,7 +671,7 @@ function measureUsage(): string {
     "verdicts from sampling noise.",
     "",
     "The scenario file is the compare format; measure exercises the shared",
-    "`skills` set (or `baselineSkills`) and needs no proposed arm. All compare",
+    "`skills` set (or `baselineSkills`, which may be `[]`) and needs no proposed arm. All compare",
     "config applies: render vars, images, pricing, productionModel, graders.",
     "",
     "overrides: --agent <file.md> --skill <SKILL.md|dir>... --model <model>",

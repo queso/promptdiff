@@ -249,3 +249,76 @@ test("loadCompareConfig parses maxTurns at both levels and rejects bad caps", ()
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test("loadCompareConfig accepts an explicit empty baselineSkills but still requires proposedSkills", () => {
+  const dir = mkdtempSync(join(tmpdir(), "promptdiff-config-empty-baseline-"));
+  try {
+    writeFileSync(join(dir, "agent.md"), "Agent", "utf8");
+    writeFileSync(join(dir, "proposed.md"), "Proposed", "utf8");
+
+    // An explicit `[]` answers "does adding this skill change anything at all"
+    // and loads with an empty baseline arm.
+    writeFileSync(
+      join(dir, "empty-baseline.json"),
+      JSON.stringify({
+        agent: "./agent.md",
+        baselineSkills: [],
+        proposedSkills: ["./proposed.md"],
+        model: "sonnet",
+        scenarios: [{ name: "t", prompt: "p", grader: { type: "text", contains: ["ok"] } }],
+      }),
+      "utf8",
+    );
+    const config = loadCompareConfig(join(dir, "empty-baseline.json"));
+    expect(config.baselineSkills).toEqual([]);
+    expect(config.proposedSkills).toEqual([join(dir, "proposed.md")]);
+
+    // A shared top-level `skills` set must not backfill an explicit `[]`:
+    // normalizeSkills returns on the Array.isArray branch before it ever
+    // reaches the shared-skills fallback, so pin that here.
+    writeFileSync(join(dir, "shared.md"), "Shared", "utf8");
+    writeFileSync(
+      join(dir, "empty-baseline-with-shared.json"),
+      JSON.stringify({
+        agent: "./agent.md",
+        skills: ["./shared.md"],
+        baselineSkills: [],
+        proposedSkills: ["./proposed.md"],
+        model: "sonnet",
+        scenarios: [{ name: "t", prompt: "p", grader: { type: "text", contains: ["ok"] } }],
+      }),
+      "utf8",
+    );
+    expect(loadCompareConfig(join(dir, "empty-baseline-with-shared.json")).baselineSkills).toEqual([]);
+
+    // Omitting the key entirely is a different failure than supplying `[]`:
+    // a typo'd or forgotten key must not silently become a no-skill baseline.
+    writeFileSync(
+      join(dir, "omitted-baseline.json"),
+      JSON.stringify({
+        agent: "./agent.md",
+        proposedSkills: ["./proposed.md"],
+        model: "sonnet",
+        scenarios: [{ name: "t", prompt: "p", grader: { type: "text", contains: ["ok"] } }],
+      }),
+      "utf8",
+    );
+    expect(() => loadCompareConfig(join(dir, "omitted-baseline.json"))).toThrow(/baseline skill paths/);
+
+    // A compare with nothing proposed is meaningless even when the baseline is empty.
+    writeFileSync(
+      join(dir, "empty-proposed.json"),
+      JSON.stringify({
+        agent: "./agent.md",
+        baselineSkills: [],
+        proposedSkills: [],
+        model: "sonnet",
+        scenarios: [{ name: "t", prompt: "p", grader: { type: "text", contains: ["ok"] } }],
+      }),
+      "utf8",
+    );
+    expect(() => loadCompareConfig(join(dir, "empty-proposed.json"))).toThrow("compare requires at least one proposed skill");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

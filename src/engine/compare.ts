@@ -495,7 +495,11 @@ async function runArm(
       if (config.delivery === "install") {
         const { installed, warnings } = installSkills(armSkills, sandbox.dir);
         if (index === 0) {
-          onProgress?.(`  ${label} installed skills: ${installed.map((skill) => skill.name).join(", ")}`);
+          onProgress?.(
+            installed.length === 0
+              ? `  ${label} installed skills: (none)`
+              : `  ${label} installed skills: ${installed.map((skill) => skill.name).join(", ")}`,
+          );
           for (const warning of warnings) {
             onProgress?.(`  WARNING: ${warning}`);
           }

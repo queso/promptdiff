@@ -94,6 +94,34 @@ test("singleArm loading accepts baselineSkills-only scenarios; compare still req
   }
 });
 
+test("singleArm loading accepts an empty baselineSkills; the mirrored empty proposed arm is never a validation error", () => {
+  const dir = mkdtempSync(join(tmpdir(), "promptdiff-measure-empty-config-"));
+  try {
+    writeFileSync(join(dir, "agent.md"), "Agent.", "utf8");
+    const scenario = {
+      agent: "./agent.md",
+      baselineSkills: [],
+      model: "sonnet",
+      scenarios: [{ name: "t", prompt: "p", grader: { type: "text", contains: ["ok"] } }],
+    };
+    const path = join(dir, "s.json");
+    writeFileSync(path, JSON.stringify(scenario), "utf8");
+
+    // "Characterize the agent with no skills" is the measure-side version of
+    // the question an empty baseline enables in compare. Proposed mirrors
+    // baseline here and no run ever touches it, so an empty mirror must load.
+    const config = loadCompareConfig(path, {}, { singleArm: true });
+    expect(config.baselineSkills).toEqual([]);
+    expect(config.proposedSkills).toEqual([]);
+
+    // The same scenario as a real compare has no proposed arm at all: that
+    // still throws, since a compare with nothing proposed is meaningless.
+    expect(() => loadCompareConfig(path)).toThrow(/proposed skill paths/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test("measure warns when the measured model diverges from productionModel", async () => {
   const dir = mkdtempSync(join(tmpdir(), "promptdiff-measure-prod-"));
   try {
