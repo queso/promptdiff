@@ -43,6 +43,8 @@ function armRecord(arm: ArmSummary, config: ArmConfig): Record<string, unknown> 
     runner: config.runner,
     passes: arm.passes,
     totalRuns: arm.totalRuns,
+    // Present only when some run produced no artifact, so older records keep their shape.
+    ...(arm.noArtifact ? { noArtifact: arm.noArtifact } : {}),
     passRate: arm.passRate,
     costUsd: arm.totalCostUsd,
   };

@@ -9,6 +9,7 @@ import { renderStrict, resolveRenderVars, type RenderVars } from "./engine/rende
 import { appendNdjsonReport } from "./engine/report";
 import { buildCompareReceipts, buildMeasureReceipts, writeReceipts } from "./engine/receipt";
 import { formatCalibrationReport, runCalibration } from "./engine/judge";
+import { loadGraderFile, runGraderFile } from "./engine/grader-file";
 import { assembleSystemPrompt } from "./prompt";
 import { createRunner, RUNNER_NAMES, type RunnerName } from "./runner";
 import type { ModelPricing } from "./runner/openai-compat";
@@ -115,6 +116,12 @@ export async function main(argv: string[]): Promise<number> {
         }
         await cmdCalibrate(rest);
         return 0;
+      case "grade":
+        if (isHelp(rest)) {
+          console.log(gradeUsage());
+          return 0;
+        }
+        return await cmdGrade(rest);
       default:
         throw new CliError(generalUsage());
     }
@@ -322,6 +329,30 @@ async function cmdCalibrate(argv: string[]): Promise<void> {
 
   // Always exit 0: calibrate measures, the compare/measure gate enforces.
   console.log(formatCalibrationReport(result));
+}
+
+const gradeSpecs: FlagSpecs = {
+  file: { arity: "one" },
+  name: { arity: "one" },
+  list: { arity: "none" },
+};
+
+async function cmdGrade(argv: string[]): Promise<number> {
+  const args = parseArgs(argv, gradeSpecs);
+  const file = args.one("file");
+  const name = args.one("name");
+  if (!file || (name === undefined) === !args.has("list")) {
+    throw new CliError(gradeUsage());
+  }
+  if (args.has("list")) {
+    // Machine-readable: the scenario loader validates grader names with this.
+    console.log(JSON.stringify(Object.keys((await loadGraderFile(file)).graders)));
+    return 0;
+  }
+  const run = await runGraderFile(file, name ?? "");
+  for (const line of run.stdout) console.log(line);
+  for (const line of run.stderr) console.error(line);
+  return run.exitCode;
 }
 
 async function cmdCompare(argv: string[]): Promise<number> {
@@ -610,7 +641,10 @@ function compareUsage(): string {
     "           (ops: == != > >= < <= contains; [*] passes if ANY element matches;",
     "           works with every runner)",
     "  command  runs a shell command inside the per-run sandbox and checks exit code",
-    "           (needs a tool-capable runner: claude-p)",
+    "           (needs a tool-capable runner: claude-p); exit 77 means no artifact",
+    "  file     { \"file\": \"./grade.eval.ts\", \"name\": <grader> } runs one named grader",
+    "           from a grader file (default export grade(artifactPath, { ... })) as a",
+    "           command in the sandbox; see `promptdiff grade --help`",
     "  judge    an explicit judge model grades the final output against a markdown",
     "           rubric: { \"type\": \"judge\", \"rubric\": \"./rubrics/r.md\", \"model\": <m>,",
     "           \"runner\": <claude-p|openai>, \"baseUrl\"?, \"minAccuracy\"? (default 0.9) }.",
@@ -636,6 +670,12 @@ function compareUsage(): string {
     "  existing file (relative to the scenario) are read as contents, otherwise",
     "  used as literals. Scenarios may add their own \"render\" (scenario wins per",
     "  var). Unbound placeholders fail before any paid run. Inline delivery only.",
+    "",
+    "no artifact:",
+    "  a run whose grader reports no artifact (exit 77) is neither a pass nor a",
+    "  failure: pass rates cover graded runs only and the summary line counts it",
+    "  (\"1/1 pass (100%), 1 no-artifact\"). An arm with no graded run fails its",
+    "  target or regression assertion.",
     "",
     "assertions:",
     "  target      baseline must not fully pass; proposed must beat baseline pass rate",
@@ -690,6 +730,9 @@ function measureUsage(): string {
     "--transcript-out <dir> additionally captures the per-event stream-json",
     "NDJSON as <scenario>_measure_<n>.stream.jsonl (claude-p only, large).",
     "",
+    "Runs whose grader reports no artifact (exit 77) are counted apart from",
+    "passes and failures: \"4/4 pass (100%), 1 no-artifact\".",
+    "",
     "Exit code is 0 whenever the runs complete — a measurement has no pass/fail.",
   ].join("\n");
 }
@@ -724,15 +767,36 @@ function calibrateUsage(): string {
   ].join("\n");
 }
 
+function gradeUsage(): string {
+  return [
+    "usage: promptdiff grade --file <grade.eval.ts> (--name <grader> | --list)",
+    "",
+    "Runs one named grader from a grader file against its artifact, resolved",
+    "relative to the current directory. compare and measure run this same",
+    "command inside each run's sandbox; run it by hand inside a kept sandbox",
+    "(--keep-sandbox) to debug a grader without paying for new runs.",
+    "",
+    "exit codes:",
+    "  0   every check passed",
+    "  1   at least one check failed (all failures are printed to stderr)",
+    "  77  no artifact: the file does not exist. compare and measure count",
+    "      this as no signal, not as a failure",
+    "  2   the grader file or name is unusable",
+    "",
+    "--list prints the file's grader names as a JSON array.",
+  ].join("\n");
+}
+
 function generalUsage(): string {
   return [
-    "usage: promptdiff <run|compare|measure|calibrate> [flags]",
+    "usage: promptdiff <run|compare|measure|calibrate|grade> [flags]",
     "",
     "commands:",
     "  run        one bounded model invocation with inlined skills",
     "  compare    N-run baseline-vs-proposed scenario comparison",
     "  measure    N-run single-arm characterization (pass rates, no assertions)",
     "  calibrate  measure a judge grader against labeled rubric fixtures",
+    "  grade      run one named grader from a grader file (what file graders execute)",
     "",
     "use `promptdiff <command> --help` for command flags",
   ].join("\n");

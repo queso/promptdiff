@@ -16,6 +16,10 @@
   "bin": {
     "promptdiff": "./promptdiff"
   },
+  "exports": {
+    ".": "./src/index.ts",
+    "./package.json": "./package.json"
+  },
   "files": [
     "promptdiff",
     "src",

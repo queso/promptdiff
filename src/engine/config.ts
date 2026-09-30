@@ -1,6 +1,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import type { GraderSpec } from "./grader";
+import { assertGraderFileHasName } from "./grader-file";
 import { parseAssertion } from "./json-assert";
 import { resolveRenderVars, type RenderVars } from "./render";
 import { deliveryValue, type Delivery } from "./skill-install";
@@ -331,7 +332,9 @@ function normalizeSkills(value: unknown, label: string, sharedSkills: string[] |
   if (sharedSkills !== undefined && (value === undefined || (isRecord(value) && value.skills === undefined))) {
     return sharedSkills;
   }
-  throw new Error(`compare requires ${label} skill paths`);
+  // A baseline-only scenario is a measurement, not a comparison; say so.
+  const hint = label === "proposed" ? "; to run one instruction set without a proposed arm, use `promptdiff measure`" : "";
+  throw new Error(`compare requires ${label} skill paths${hint}`);
 }
 
 /** Resolves one arm's model/runner/baseUrl: per-arm override, per-arm field, shared override, shared field. */
@@ -405,6 +408,22 @@ function graderValue(value: unknown, scenarioName: string, baseDir: string): Gra
       expectExitCode: optionalNumber(value.expectExitCode, `${scenarioName}.grader.expectExitCode`),
     };
   }
+  // The grader-file shape needs no "type": { "file": "./grade.eval.ts", "name": "..." }.
+  if (value.type === "file" || (value.type === undefined && value.file !== undefined)) {
+    const label = `${scenarioName}.grader`;
+    const file = resolveFrom(baseDir, requiredString(value.file, `${label}.file`));
+    const name = requiredString(value.name, `${label}.name`);
+    // A missing file or misspelled name must fail at load time, not after the
+    // other arm's paid runs.
+    assertGraderFileHasName(file, name, label);
+    return {
+      type: "file",
+      file,
+      name,
+      cwd: stringValue(value.cwd, undefined),
+      timeoutMs: optionalNumber(value.timeoutMs, `${label}.timeoutMs`),
+    };
+  }
   if (value.type === "judge") {
     const rubric = resolveFrom(baseDir, requiredString(value.rubric, `${scenarioName}.grader.rubric`));
     // A missing rubric must fail at load time, not after the other arm's paid runs.
@@ -426,7 +445,9 @@ function graderValue(value: unknown, scenarioName: string, baseDir: string): Gra
       minAccuracy,
     };
   }
-  throw new Error(`${scenarioName}.grader.type must be "text", "json", "command", or "judge"`);
+  throw new Error(
+    `${scenarioName}.grader.type must be "text", "json", "command", or "judge" (or omit "type" and set "file" + "name" for a grader file)`,
+  );
 }
 
 function kindValue(value: unknown, fallback: ScenarioKind): ScenarioKind {

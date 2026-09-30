@@ -1,0 +1,21 @@
+{
+  "name": "day-planner",
+  "agent": "./agent.md",
+  "skills": ["./skill.md"],
+  "model": "haiku",
+  "runs": 4,
+  "mode": "artifact",
+  "maxTurns": 6,
+  "scenarios": [
+    {
+      "name": "no-overlaps",
+      "prompt": "Plan Tuesday between 09:00 and 17:00: Design review (60 min), 1:1 with Priya (30 min), Budget sync (45 min), Hiring debrief (60 min). Keep 12:00-13:00 free for lunch.",
+      "grader": { "file": "./grade.eval.ts", "name": "no-overlaps" }
+    },
+    {
+      "name": "lunch-stays-free",
+      "prompt": "Plan Tuesday between 09:00 and 17:00: Design review (60 min), 1:1 with Priya (30 min), Budget sync (45 min), Hiring debrief (60 min). Keep 12:00-13:00 free for lunch.",
+      "grader": { "file": "./grade.eval.ts", "name": "lunch-stays-free" }
+    }
+  ]
+}

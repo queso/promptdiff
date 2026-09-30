@@ -3,15 +3,18 @@
 `promptdiff` is a small Bun CLI for testing whether an LLM prompt or skill
 change actually changes behavior — with any model, not just Claude.
 
-It has four commands:
+It has five commands:
 
 - `run`: one bounded model invocation with an agent file and optional inlined
   skill files.
 - `compare`: N-run baseline-vs-proposed comparison from a JSON scenario file,
-  with deterministic text or command graders (plus calibrated LLM judges).
+  with deterministic text, json, command, or grader-file graders (plus
+  calibrated LLM judges).
 - `measure`: N-run single-arm characterization — pass rates, no assertions.
 - `calibrate`: prove a judge grader against labeled rubric fixtures before
   compare/measure will let it grade anything.
+- `grade`: run one named grader from a grader file by hand, for example
+  inside a kept sandbox.
 
 Model access goes through pluggable runners. Two ship today:
 
@@ -334,6 +337,11 @@ Reading results:
 - Declare `"productionModel": "gpt-5.5"` and any arm testing a different
   model gets a warning on the summary — a pass on the wrong model validates
   prompt logic, not production behavior.
+- Runs whose grader reported [no artifact](#no-artifact) are left out of the
+  pass rate and counted on their own (`1/1 pass (100%), 1 no-artifact`),
+  with a `NOTE` naming each arm's count. An arm with no graded run at all
+  fails a target or regression assertion, since it has no pass rate to
+  compare.
 
 ### Raw per-run results
 
@@ -462,13 +470,23 @@ per-case pass rates, no delta and no assertions:
 ```
 
 The scenario file is the compare format — render vars, images, pricing,
-`productionModel`, and both grader types all apply — but only `skills` (or
+`productionModel`, and every grader type apply — but only `skills` (or
 `baselineSkills`) is required; no proposed arm. An explicit `[]` is valid and
 measures the agent with no skills. Don't fake this with
 identical compare arms: two identical arms at small n routinely produce
 verdicts like `FAIL: proposed regressed below baseline` out of pure sampling
 noise. `measure` exits 0 whenever the runs complete — a measurement has no
 pass/fail.
+
+A run where the agent wrote nothing is not a pass and not a reproduction.
+When the grader reports [no artifact](#no-artifact), the summary line counts
+it separately, and the pass rate covers only the graded runs:
+
+```
+reproduces-defect
+  4/4 pass (100%), 1 no-artifact | $0.4210
+  run 3 no artifact: 02_debating/edit_plan.draft.json does not exist in the grader's working directory
+```
 
 ## Comparing models
 
@@ -683,6 +701,113 @@ scenario so no tools are demanded, and script against the file:
 }
 ```
 
+### Grader files
+
+A grader file holds named graders for one artifact. Most real graders are
+semantic, so lead with `result.assert`: plain code for the condition, a
+message for when it fails, and the data it judged as context.
+
+```ts
+// grade.eval.ts
+import { grade } from "@theaiteam/promptdiff";
+
+type Plan = { a_roll: Array<{ source_in: number; source_out: number }> };
+const keptSeconds = (plan: Plan) => plan.a_roll.reduce((sum, s) => sum + (s.source_out - s.source_in), 0);
+
+export default grade("02_debating/edit_plan.draft.json", {
+  "product-named": ({ result }) => {
+    const kept: Plan["a_roll"] = result.json().a_roll;
+    result.assert(
+      kept.some((s) => s.source_in <= 8.0 && 8.0 <= s.source_out),
+      "no kept range covers t=8.0",
+      { ranges: kept },
+    );
+    result.shouldHave("cinema cutie");
+    result.shouldNotHave("lorem");
+  },
+  "still-edits": ({ result }) => {
+    const kept = keptSeconds(result.json());
+    result.assert(kept / 64.672 <= 0.9, `kept ${kept}s of 64.672s: keep-everything degeneration`);
+  },
+});
+```
+
+The scenario names the file and the grader:
+
+```json
+"grader": { "file": "./grade.eval.ts", "name": "product-named" }
+```
+
+`result` offers:
+
+- `result.assert(condition, message, context?)`: passes when `condition` is
+  truthy. On failure it prints `message` and `context` as JSON. Use it for
+  anything a substring cannot express: ranges, counts, ratios, structure.
+- `result.json()`: the artifact parsed as JSON. Invalid JSON fails the
+  grader with the parse error.
+- `result.text` and `result.path`: the raw contents and the path as given.
+- `result.shouldHave(str)`, `result.shouldNotHave(str)`,
+  `result.shouldMatch(regex)`: literal checks. A failure prints what the
+  artifact held instead (its start, or the text around a forbidden match).
+
+Every check returns whether it passed and never stops the grader, so one
+run reports every failure. An exception in the grader (a bug, or `json()` on
+invalid JSON) is one more failure; checks made before it still count. A
+grader that makes no checks fails.
+
+How it runs:
+
+- The artifact path resolves against the grader's working directory: the
+  run sandbox, or the grader's `cwd` inside it, the same place a command
+  grader runs. Absolute paths work too. To grade the run's final text output
+  instead of a file, pass `process.env.PROMPTDIFF_OUTPUT_FILE!`.
+- A file grader is a command grader underneath. The engine runs
+  `promptdiff grade --file <file> --name <name>` in the sandbox, with the
+  same exit-code contract: 0 pass, 1 failed checks (all printed to stderr),
+  77 [no artifact](#no-artifact). Run that command yourself inside a
+  `--keep-sandbox` directory to debug a grader without new model runs.
+- The grader's last stderr line (`grade "product-named" (...): 2 of 3 checks
+  failed`) becomes the run's message in the summary, followed by the
+  failure lines.
+- The file and the name are checked when the scenario loads, before any paid
+  run: a missing file, a default export that is not `grade(...)`, or an
+  unknown name fails with the names the file does define.
+- Optional fields: `"cwd"` and `"timeoutMs"`, as for command graders. Like
+  command graders, grader files need a tool-capable runner (claude-p) unless
+  the scenario sets `"mode": "text"`.
+- The import resolves to the running promptdiff under `promptdiff grade`, so
+  the file works without the package installed beside it. `import { grade }
+  from "promptdiff"` works too. Install `@theaiteam/promptdiff` as a dev
+  dependency for editor types.
+- `compare --cache` keys on the grader file's content, so editing a check
+  misses the cache. Files the grader imports are not hashed.
+
+[examples/07-grader-file](./examples/07-grader-file/) runs two semantic
+graders against sample schedules with no model run.
+
+### No artifact
+
+A run where the agent wrote nothing gives a grader nothing to judge. That
+is its own outcome, `no-artifact`, distinct from a failed check: counting it
+as a failure inflates reproduction rates, and a negative check
+(`shouldNotHave`) against a missing file would otherwise pass.
+
+- File graders report it on their own when the artifact path does not exist.
+- Command graders report it by exiting 77. The code is also in
+  `$PROMPTDIFF_NO_ARTIFACT_EXIT_CODE`:
+
+  ```sh
+  test -f draft.json || exit "$PROMPTDIFF_NO_ARTIFACT_EXIT_CODE"
+  ```
+
+  A command grader with `"expectExitCode": 77` keeps treating 77 as a pass.
+  Before this existed, exit 77 was an ordinary failure; it is still never a
+  pass.
+
+`measure` and `compare` exclude no-artifact runs from pass rates and show
+the count on the summary line (`4/4 pass (100%), 1 no-artifact`). Reports
+and receipts carry a `noArtifact` count when it is non-zero.
+
 ## Judge graders (calibrated)
 
 Some judgments cannot be expressed as string checks — "is this the
@@ -770,8 +895,9 @@ Lessons from production compare runs, for scenario authors:
 ## Security note
 
 Command graders execute arbitrary shell commands from scenario files (inside
-the per-run sandbox, but with your local permissions). Only run scenario files
-you trust.
+the per-run sandbox, but with your local permissions). Grader files are code
+too: loading a scenario imports each one to check its grader names. Only run
+scenario files you trust.
 
 ## Development
 

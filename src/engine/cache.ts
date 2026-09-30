@@ -62,6 +62,10 @@ export function buildCacheKey(input: CacheKeyInput): string {
     mode: input.mode,
     delivery: input.delivery,
     grader: input.grader,
+    // A grader file's path is in the spec but its checks are in its content;
+    // editing the checks must miss. Undefined for other graders, so their
+    // keys are unchanged.
+    graderFile: input.grader.type === "file" ? sha256(readFileSync(input.grader.file)) : undefined,
     images: input.images.map((image) => sha256(readFileSync(image))),
     seedTree: input.seedDir === undefined ? "none" : hashTree(input.seedDir),
     baselineSkillTrees: input.delivery === "install" ? input.baselineSkills.map(hashTree) : [],
