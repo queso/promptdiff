@@ -141,7 +141,16 @@ export function assertGraderFileHasName(file: string, name: string, label: strin
     const reason = proc.stderr.toString().trim() || `exit ${proc.exitCode}`;
     throw new Error(`${label}.file: cannot load ${file}: ${reason}`);
   }
-  const names = JSON.parse(proc.stdout.toString()) as string[];
+  // The listing is the last line: anything the grader file prints while it
+  // loads comes before it.
+  const stdout = proc.stdout.toString();
+  const listing = stdout.trimEnd().split("\n").at(-1) ?? "";
+  let names: string[];
+  try {
+    names = JSON.parse(listing) as string[];
+  } catch {
+    throw new Error(`${label}.file: cannot load ${file}: unparseable grader listing: ${JSON.stringify(stdout.slice(0, 200))}`);
+  }
   if (!names.includes(name)) {
     throw new Error(`${label}.name: ${file} has no grader named ${JSON.stringify(name)} (has: ${names.join(", ")})`);
   }

@@ -189,6 +189,15 @@ test("inherited Object.prototype names are not graders", async () => {
   expect(() => loadCompareConfig(path, {}, { singleArm: true })).toThrow(/has no grader named "constructor"/);
 });
 
+test("a grader file that prints while loading still validates at scenario load", () => {
+  const dir = join(root, "noisy");
+  writeGraderFile(dir, `console.log("loading graders");\n${GRADER_SOURCE}`);
+  const path = writeScenario(dir, { file: "./grade.eval.ts", name: "covers-8" });
+  expect(() => loadCompareConfig(path, {}, { singleArm: true })).not.toThrow();
+  const missing = writeScenario(dir, { file: "./grade.eval.ts", name: "nope" });
+  expect(() => loadCompareConfig(missing, {}, { singleArm: true })).toThrow(/has no grader named "nope" \(has: covers-8/);
+});
+
 test("a file grader that hangs is killed at timeoutMs and fails as a timeout, not no-artifact", async () => {
   const dir = join(root, "timeout");
   const file = writeGraderFile(
