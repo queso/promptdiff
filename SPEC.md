@@ -177,6 +177,8 @@ Target assertions:
 Regression assertions:
 
 1. proposed must not fall below baseline pass rate
+2. proposed must not produce the artifact in a smaller share of its runs than
+   baseline (see **No artifact**)
 
 Every case also carries a two-tailed Fisher exact p for its pass/fail table;
 the summary labels deltas with p > 0.05 as explainable by sampling noise.
@@ -289,8 +291,10 @@ runs (`totalRuns - noArtifact`), and Fisher's p uses the graded counts.
 Summaries print `4/4 pass (100%), 1 no-artifact` and list each such run.
 `compare` adds a `NOTE` with both arms' no-artifact counts whenever either
 is non-zero, and fails target and regression assertions for an arm with no
-graded run at all, which has no pass rate to compare. An arm that produces
-the artifact less often is noted, not failed.
+graded run at all, which has no pass rate to compare. A regression
+assertion also fails when proposed produces the artifact in a smaller share
+of its runs than baseline, since excluding those runs from the pass rate
+would otherwise hide a change that stops the agent writing the artifact.
 
 LLM judges are implemented, WITH mandatory calibration, for judgments that
 cannot be expressed as local checks (semantic and style rubrics that regex
