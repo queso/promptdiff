@@ -163,9 +163,19 @@ test("scenario files parse delivery and reject install with disabled tools", () 
     writeFileSync(defaultPath, JSON.stringify(base), "utf8");
     expect(loadCompareConfig(defaultPath).delivery).toBe("inline");
 
-    // The JSON parser already rejects a literal empty tools string; the CLI
-    // --tools "" override is the path that can smuggle it in.
+    // tools "" disables tools whether it comes from the scenario file or the
+    // --tools "" override, and install delivery rejects both.
     expect(() => loadCompareConfig(okPath, { tools: "" })).toThrow(/tools enabled/);
+    const noToolsPath = join(dir, "no-tools.json");
+    writeFileSync(noToolsPath, JSON.stringify({ ...base, delivery: "install", tools: "" }), "utf8");
+    expect(() => loadCompareConfig(noToolsPath)).toThrow(/tools enabled/);
+    const caseNoToolsPath = join(dir, "case-no-tools.json");
+    writeFileSync(
+      caseNoToolsPath,
+      JSON.stringify({ ...base, delivery: "install", scenarios: [{ ...base.scenarios[0], tools: "" }] }),
+      "utf8",
+    );
+    expect(() => loadCompareConfig(caseNoToolsPath)).toThrow(/tools enabled/);
 
     const badRegexPath = join(dir, "bad-regex.json");
     writeFileSync(
