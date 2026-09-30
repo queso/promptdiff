@@ -1,6 +1,7 @@
 import { existsSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import type { RunResult } from "../types";
+import { fileGraderCommand, NO_ARTIFACT_EXIT_CODE, type FileGraderSpec } from "./grader-file";
 import { evaluateAssertion, extractLastJson, parseAssertion } from "./json-assert";
 import { gradeWithJudge, type JudgeGraderSpec } from "./judge";
 
@@ -23,6 +24,7 @@ export type GraderSpec =
       timeoutMs?: number;
       expectExitCode?: number;
     }
+  | FileGraderSpec
   | JudgeGraderSpec;
 
 export interface GradeInput {
@@ -35,6 +37,12 @@ export interface GradeInput {
 
 export interface GradeResult {
   pass: boolean;
+  /**
+   * The grader reported that the artifact it grades does not exist (exit
+   * NO_ARTIFACT_EXIT_CODE). No signal: never a pass, and excluded from pass
+   * rates rather than counted as a failure.
+   */
+  noArtifact?: boolean;
   message: string;
   stdout?: string;
   stderr?: string;
@@ -63,7 +71,21 @@ export async function gradeRun(spec: GraderSpec, input: GradeInput): Promise<Gra
   // text IS the artifact, so it lands in the sandbox too ($PROMPTDIFF_OUTPUT_FILE).
   const outputFile = join(input.sandboxDir, ".promptdiff-output.txt");
   writeFileSync(outputFile, input.run.output);
+  if (spec.type === "file") {
+    return gradeFile(spec, input.sandboxDir, outputFile);
+  }
   return gradeCommand(spec, input.sandboxDir, outputFile);
+}
+
+/** A grader file is a command grader: same sandbox cwd, same exit-code contract. */
+async function gradeFile(spec: FileGraderSpec, sandboxDir: string, outputFile: string): Promise<GradeResult> {
+  const result = await gradeCommand(
+    { type: "command", command: fileGraderCommand(spec), cwd: spec.cwd, timeoutMs: spec.timeoutMs },
+    sandboxDir,
+    outputFile,
+    { verdictFromStderr: true },
+  );
+  return result.pass ? { ...result, message: "file grader passed" } : result;
 }
 
 function gradeText(spec: Extract<GraderSpec, { type: "text" }>, output: string): GradeResult {
@@ -107,6 +129,7 @@ async function gradeCommand(
   spec: Extract<GraderSpec, { type: "command" }>,
   sandboxDir: string,
   outputFile: string,
+  options: { verdictFromStderr?: boolean } = {},
 ): Promise<GradeResult> {
   const cwd = resolve(sandboxDir, spec.cwd ?? ".");
   if (!existsSync(cwd)) {
@@ -115,7 +138,11 @@ async function gradeCommand(
 
   const proc = Bun.spawn(["sh", "-lc", spec.command], {
     cwd,
-    env: { ...process.env, PROMPTDIFF_OUTPUT_FILE: outputFile },
+    env: {
+      ...process.env,
+      PROMPTDIFF_OUTPUT_FILE: outputFile,
+      PROMPTDIFF_NO_ARTIFACT_EXIT_CODE: String(NO_ARTIFACT_EXIT_CODE),
+    },
     stdout: "pipe",
     stderr: "pipe",
   });
@@ -140,9 +167,23 @@ async function gradeCommand(
   }
 
   const expected = spec.expectExitCode ?? 0;
+  // File graders end stderr with a one-line verdict ("2 of 5 checks failed",
+  // "no artifact: ..."), which says more than the bare exit code.
+  const verdict = options.verdictFromStderr ? stderr.trim().split("\n").at(-1) || undefined : undefined;
+  // An explicit expectExitCode of 77 keeps its old meaning; only unexpected
+  // 77s are reclassified, so no existing grader flips between pass and fail.
+  if (code === NO_ARTIFACT_EXIT_CODE && expected !== NO_ARTIFACT_EXIT_CODE) {
+    return {
+      pass: false,
+      noArtifact: true,
+      message: verdict ?? `no artifact (grader exited ${NO_ARTIFACT_EXIT_CODE})`,
+      stdout,
+      stderr,
+    };
+  }
   return {
     pass: code === expected,
-    message: code === expected ? "command grader passed" : `command exited ${code}, expected ${expected}`,
+    message: code === expected ? "command grader passed" : (verdict ?? `command exited ${code}, expected ${expected}`),
     stdout,
     stderr,
   };

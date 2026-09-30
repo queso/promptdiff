@@ -27,6 +27,13 @@ export interface ArmSummary {
   name: "baseline" | "proposed";
   passes: number;
   totalRuns: number;
+  /**
+   * Runs whose grader reported no artifact. They are neither passes nor
+   * failures: passRate is passes over the remaining (graded) runs. Absent in
+   * cache records written before this field existed, which means 0.
+   */
+  noArtifact?: number;
+  /** passes / graded runs (totalRuns minus noArtifact); 0 when no run was graded. */
   passRate: number;
   totalCostUsd: number;
   runs: ArmRunSummary[];
@@ -108,7 +115,7 @@ export async function runCompare(options: CompareRunOptions): Promise<CompareSum
       baseline,
       proposed,
       assertions: evaluateAssertions(evalCase, baseline, proposed),
-      samplingP: fisherExactTwoTailedP(baseline.passes, baseline.totalRuns, proposed.passes, proposed.totalRuns),
+      samplingP: fisherExactTwoTailedP(baseline.passes, gradedRuns(baseline), proposed.passes, gradedRuns(proposed)),
       promptSha256: { baseline: sha256(baselineSystem), proposed: sha256(proposedSystem) },
     });
   }
@@ -142,8 +149,8 @@ export function formatCompareSummary(summary: CompareSummary): string {
     lines.push(
       "",
       `${caseSummary.name} (${caseSummary.kind})`,
-      `  ${baselineLabel}: ${caseSummary.baseline.passes}/${caseSummary.baseline.totalRuns} pass (${formatPct(caseSummary.baseline.passRate)}) | $${caseSummary.baseline.totalCostUsd.toFixed(4)}${caseSummary.baseline.cached ? " (cached)" : ""}`,
-      `  ${proposedLabel}: ${caseSummary.proposed.passes}/${caseSummary.proposed.totalRuns} pass (${formatPct(caseSummary.proposed.passRate)}) | $${caseSummary.proposed.totalCostUsd.toFixed(4)}`,
+      `  ${baselineLabel}: ${formatPassCount(caseSummary.baseline)} | $${caseSummary.baseline.totalCostUsd.toFixed(4)}${caseSummary.baseline.cached ? " (cached)" : ""}`,
+      `  ${proposedLabel}: ${formatPassCount(caseSummary.proposed)} | $${caseSummary.proposed.totalCostUsd.toFixed(4)}`,
       `  delta: ${deltaPass >= 0 ? "+" : ""}${formatPct(deltaPass)} pass | ${deltaCost >= 0 ? "+" : ""}$${deltaCost.toFixed(4)}`,
     );
 
@@ -155,6 +162,14 @@ export function formatCompareSummary(summary: CompareSummary): string {
       lines.push("  INFO: no assertion (kind \"compare\")");
     } else {
       lines.push("  PASS: assertions satisfied");
+    }
+
+    // Pass rates silently computed over fewer runs than the header implies
+    // would hide an arm that stopped producing the artifact.
+    if ((caseSummary.baseline.noArtifact ?? 0) + (caseSummary.proposed.noArtifact ?? 0) > 0) {
+      lines.push(
+        `  NOTE: pass rates exclude runs with no artifact (baseline ${caseSummary.baseline.noArtifact ?? 0}/${caseSummary.baseline.totalRuns}, proposed ${caseSummary.proposed.noArtifact ?? 0}/${caseSummary.proposed.totalRuns})`,
+      );
     }
 
     // A pass-rate delta that noise explains must not read like a receipt:
@@ -174,7 +189,7 @@ export function formatCompareSummary(summary: CompareSummary): string {
     for (const arm of [caseSummary.baseline, caseSummary.proposed]) {
       for (const run of arm.runs) {
         if (run.pass) continue;
-        lines.push(`  ${arm.name} run ${run.run} failed: ${run.grade.message}`);
+        lines.push(`  ${arm.name} ${describeUnpassedRun(run)}`);
         lines.push(...graderEvidence(run.grade));
       }
     }
@@ -202,6 +217,28 @@ export function formatCompareSummary(summary: CompareSummary): string {
   }
 
   return lines.join("\n");
+}
+
+/**
+ * "3/4 pass (75%), 1 no-artifact": the denominator is graded runs, so a run
+ * that produced nothing inflates neither the pass count nor the failure count.
+ */
+function formatPassCount(arm: ArmSummary): string {
+  const graded = gradedRuns(arm);
+  const base = `${arm.passes}/${graded} pass (${graded === 0 ? "n/a" : formatPct(arm.passRate)})`;
+  return arm.noArtifact ? `${base}, ${arm.noArtifact} no-artifact` : base;
+}
+
+function describeUnpassedRun(run: ArmRunSummary): string {
+  if (!run.grade.noArtifact) return `run ${run.run} failed: ${run.grade.message}`;
+  // File graders already lead their message with "no artifact:".
+  return run.grade.message.startsWith("no artifact")
+    ? `run ${run.run} ${run.grade.message}`
+    : `run ${run.run} no artifact: ${run.grade.message}`;
+}
+
+function gradedRuns(arm: ArmSummary): number {
+  return arm.totalRuns - (arm.noArtifact ?? 0);
 }
 
 function sha256(text: string): string {
@@ -283,7 +320,7 @@ export function validateRunnerSupport(
     if (effectiveTools(config, evalCase) !== "") {
       throw new Error(
         `runner "${runner.name}" is text-only, but scenario "${evalCase.name}" needs sandbox tools ` +
-          `(artifact mode, a command grader, or an explicit tools list) — use claude-p or make the scenario text-graded`,
+          `(artifact mode, a command or file grader, or an explicit tools list) — use claude-p or make the scenario text-graded`,
       );
     }
   }
@@ -363,11 +400,11 @@ export function formatMeasureSummary(summary: MeasureSummary): string {
     lines.push(
       "",
       caseSummary.name,
-      `  ${result.passes}/${result.totalRuns} pass (${formatPct(result.passRate)}) | $${result.totalCostUsd.toFixed(4)}`,
+      `  ${formatPassCount(result)} | $${result.totalCostUsd.toFixed(4)}`,
     );
     for (const run of result.runs) {
       if (run.pass) continue;
-      lines.push(`  run ${run.run} failed: ${run.grade.message}`);
+      lines.push(`  ${describeUnpassedRun(run)}`);
       lines.push(...graderEvidence(run.grade));
     }
   }
@@ -526,12 +563,15 @@ async function runArm(
   }
 
   const passes = summaries.filter((summary) => summary.pass).length;
+  const noArtifact = summaries.filter((summary) => summary.grade.noArtifact).length;
+  const graded = runs - noArtifact;
   const totalCostUsd = summaries.reduce((sum, summary) => sum + summary.costUsd, 0);
   return {
     name: arm,
     passes,
     totalRuns: runs,
-    passRate: passes / runs,
+    noArtifact,
+    passRate: graded === 0 ? 0 : passes / graded,
     totalCostUsd,
     runs: summaries,
   };
@@ -661,6 +701,13 @@ function evaluateAssertions(
     return [];
   }
 
+  // With no graded run an arm's pass rate is not a measurement, and a
+  // directional verdict built on it would be invented.
+  const ungraded = [baseline, proposed].filter((arm) => gradedRuns(arm) === 0);
+  if (ungraded.length > 0) {
+    return ungraded.map((arm) => `${arm.name} produced no artifact in any run; there is nothing to compare`);
+  }
+
   if (evalCase.kind === "target") {
     const failures = [];
     if (baseline.passRate >= 1) {
@@ -679,9 +726,10 @@ function evaluateAssertions(
 }
 
 function inferMode(evalCase: EvalCaseConfig): "text" | "artifact" {
-  // text, json, and judge graders inspect the run's output only, so they
+  // Command and file graders read files the agent wrote in the sandbox; text,
+  // json, and judge graders inspect the run's output only, so they
   // demand no sandbox tools and stay valid on text-only runners (openai).
-  return evalCase.grader.type === "command" ? "artifact" : "text";
+  return evalCase.grader.type === "command" || evalCase.grader.type === "file" ? "artifact" : "text";
 }
 
 function defaultTools(mode: "text" | "artifact"): string {

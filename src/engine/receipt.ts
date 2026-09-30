@@ -31,7 +31,8 @@ export interface Receipt {
   };
   /** Hash of the rendered system prompt(s) — also pins render-var fixtures. */
   renderedPromptSha256?: unknown;
-  results: Record<string, { passes: number; totalRuns: number; passRate: number; costUsd: number }>;
+  /** noArtifact appears only when some run produced no artifact; passRate excludes those runs. */
+  results: Record<string, { passes: number; totalRuns: number; noArtifact?: number; passRate: number; costUsd: number }>;
   samplingP?: number;
   productionModel?: string;
 }
@@ -102,8 +103,14 @@ export function writeReceipts(dir: string, receipts: Receipt[]): string[] {
   });
 }
 
-function armResult(arm: { passes: number; totalRuns: number; passRate: number; totalCostUsd: number }) {
-  return { passes: arm.passes, totalRuns: arm.totalRuns, passRate: arm.passRate, costUsd: arm.totalCostUsd };
+function armResult(arm: { passes: number; totalRuns: number; noArtifact?: number; passRate: number; totalCostUsd: number }) {
+  return {
+    passes: arm.passes,
+    totalRuns: arm.totalRuns,
+    ...(arm.noArtifact ? { noArtifact: arm.noArtifact } : {}),
+    passRate: arm.passRate,
+    costUsd: arm.totalCostUsd,
+  };
 }
 
 /** Repo-relative path + content hash; install-delivery skill dirs get a deterministic tree hash. */
