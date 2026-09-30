@@ -244,6 +244,54 @@ output is also written into the sandbox and exposed to command graders as
 `$PROMPTDIFF_OUTPUT_FILE`, so completion-only runs can be command-graded
 (scenario `mode: "text"` keeps the tools demand at zero).
 
+**Grader files.** The command contract (run in the sandbox, exit code is the
+verdict, stderr is the diagnostics) stays the base layer; any executable in
+any language can grade. A grader file is a layer on top of it for the common
+case of checking one artifact from TS/JS. The file's default export is
+`grade(artifactPath, { name: ({ result }) => { ... } })`, and a scenario
+selects one grader with `{ "file": "./grade.eval.ts", "name": "..." }` (no
+`type` needed; `"type": "file"` is accepted). `result` offers
+`assert(condition, message, context?)` for semantic checks, `json()`, `text`,
+`path`, and the literal checks `shouldHave`, `shouldNotHave`, and
+`shouldMatch`. `assert` is the primary check in docs and examples on
+purpose: the strongest graders in use are semantic (range coverage,
+calibrated regex rulers), and substring sugar alone would push authors
+toward brittle string matching.
+
+The engine compiles a file grader to a command grader:
+`<bun> <promptdiff> grade --file <abs path> --name <name>`, run in the same
+sandbox cwd with the same timeout handling. `promptdiff grade` resolves the
+artifact against its cwd (the sandbox, or the grader's `cwd` inside it),
+reads it, runs the named grader, and collects every check rather than
+stopping at the first failure. It exits 0 when all checks pass, 1 when any
+fail (each failure on one stderr line with its context, then a one-line
+verdict that becomes the run's grade message), 77 when the artifact does not
+exist, and 2 when the file or name is unusable. A grader that makes no
+checks fails. An exception inside a grader is recorded as one more failure.
+Under `promptdiff grade`, the specifiers `@theaiteam/promptdiff` and
+`promptdiff` resolve to the running copy through a Bun runtime plugin, so a
+grader file needs no local install and cannot drift from the runner's
+version. Scenario loading checks each file and name in a child process
+(`promptdiff grade --list`) before any paid run. The baseline cache key
+includes the grader file's content hash (not the files it imports).
+
+**No artifact.** A grader that finds nothing to grade reports `no-artifact`,
+a third outcome beside pass and assertion-failed. File graders report it
+when the artifact path does not exist. Command graders report it by exiting
+77 (also exported as `$PROMPTDIFF_NO_ARTIFACT_EXIT_CODE`), unless their
+`expectExitCode` is 77, which keeps its old meaning. No existing command
+grader changes between pass and fail: an exit 77 was a failure before and is
+still not a pass. A no-artifact run is never a pass, so a negative check
+cannot pass on an agent that produced nothing, and it is not counted as a
+failure, so reproduction rates are not inflated by runs with no signal.
+`ArmSummary.noArtifact` counts these runs; `passRate` is passes over graded
+runs (`totalRuns - noArtifact`), and Fisher's p uses the graded counts.
+Summaries print `4/4 pass (100%), 1 no-artifact` and list each such run.
+`compare` adds a `NOTE` with both arms' no-artifact counts whenever either
+is non-zero, and fails target and regression assertions for an arm with no
+graded run at all, which has no pass rate to compare. An arm that produces
+the artifact less often is noted, not failed.
+
 LLM judges are implemented, WITH mandatory calibration, for judgments that
 cannot be expressed as local checks (semantic and style rubrics that regex
 both under- and over-catches). The design premise is that an uncalibrated
@@ -282,6 +330,8 @@ promptdiff          # Bun executable shim
 src/cli.ts          # command parsing and user-facing orchestration
 src/args.ts         # strict local flag parser
 src/prompt.ts       # frontmatter stripping and prompt assembly
+src/index.ts        # package entry for grader files (exports grade)
+src/grade.ts        # grader-file authoring API and check collection
 src/runner/         # provider-coupled runner code
 src/engine/         # compare loop, config loading, graders, sandbox lifecycle
 test/               # Bun tests
@@ -310,8 +360,10 @@ always runs fresh. Deleting the cache directory busts it.
   decisive effects at small N, but there is no statistical test yet.
 - Scenario authoring is manual JSON. A future tuning loop should generate these
   files from accepted findings.
-- Command graders run trusted local commands from scenario files. Do not run
-  untrusted scenario files.
+- Command graders run trusted local commands from scenario files, and loading
+  a scenario imports its grader files. Do not run untrusted scenario files.
+- The cache key hashes a grader file but not modules it imports; editing a
+  helper module alone does not bust the baseline cache.
 - The openai runner is a single completion per run: no tool use, so it can only
   answer text-graded questions. Tool-using evals on non-Claude models would
   need an agentic runner (e.g. wrapping another agent CLI).
