@@ -327,7 +327,9 @@ function normalizeSkills(value: unknown, label: string, sharedSkills: string[] |
   if (sharedSkills !== undefined && (value === undefined || (isRecord(value) && value.skills === undefined))) {
     return sharedSkills;
   }
-  throw new Error(`compare requires ${label} skill paths`);
+  // A baseline-only scenario is a measurement, not a comparison; say so.
+  const hint = label === "proposed" ? "; to run one instruction set without a proposed arm, use `promptdiff measure`" : "";
+  throw new Error(`compare requires ${label} skill paths${hint}`);
 }
 
 /** Resolves one arm's model/runner/baseUrl: per-arm override, per-arm field, shared override, shared field. */
