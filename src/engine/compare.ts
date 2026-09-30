@@ -729,10 +729,19 @@ function evaluateAssertions(
     return failures;
   }
 
+  const failures = [];
   if (proposed.passRate < baseline.passRate) {
-    return ["proposed regressed below baseline pass rate"];
+    failures.push("proposed regressed below baseline pass rate");
   }
-  return [];
+  // Pass rates exclude no-artifact runs, so a change that stops the agent
+  // writing the artifact would otherwise hide behind a steady pass rate.
+  if (gradedRuns(proposed) / proposed.totalRuns < gradedRuns(baseline) / baseline.totalRuns) {
+    failures.push(
+      `proposed produced the artifact in ${gradedRuns(proposed)}/${proposed.totalRuns} runs, ` +
+        `less often than baseline (${gradedRuns(baseline)}/${baseline.totalRuns})`,
+    );
+  }
+  return failures;
 }
 
 function inferMode(evalCase: EvalCaseConfig): "text" | "artifact" {

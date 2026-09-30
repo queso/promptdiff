@@ -189,6 +189,15 @@ test("inherited Object.prototype names are not graders", async () => {
   expect(() => loadCompareConfig(path, {}, { singleArm: true })).toThrow(/has no grader named "constructor"/);
 });
 
+test("a grader file that prints while loading still validates at scenario load", () => {
+  const dir = join(root, "noisy");
+  writeGraderFile(dir, `console.log("loading graders");\n${GRADER_SOURCE}`);
+  const path = writeScenario(dir, { file: "./grade.eval.ts", name: "covers-8" });
+  expect(() => loadCompareConfig(path, {}, { singleArm: true })).not.toThrow();
+  const missing = writeScenario(dir, { file: "./grade.eval.ts", name: "nope" });
+  expect(() => loadCompareConfig(missing, {}, { singleArm: true })).toThrow(/has no grader named "nope" \(has: covers-8/);
+});
+
 test("a file grader that hangs is killed at timeoutMs and fails as a timeout, not no-artifact", async () => {
   const dir = join(root, "timeout");
   const file = writeGraderFile(
@@ -385,12 +394,22 @@ test("compare excludes no-artifact runs from pass rates, notes them, and refuses
   const summary = await runCompare({ config: regression, runners: { baseline: shared, proposed: shared } });
   const caseSummary = summary.cases[0]!;
   expect(caseSummary.proposed).toMatchObject({ passes: 1, noArtifact: 1, passRate: 1 });
-  // 1/1 is not a regression from 2/2; a no-artifact run is not a failure.
-  expect(caseSummary.assertions).toEqual([]);
+  // 1/1 against 2/2 is no pass-rate regression, but proposed wrote the
+  // artifact in 1 of 2 runs against baseline's 2 of 2, and that is one.
+  expect(caseSummary.assertions).toEqual([
+    "proposed produced the artifact in 1/2 runs, less often than baseline (2/2)",
+  ]);
   const text = formatCompareSummary(summary);
   expect(text).toContain("proposed: 1/1 pass (100%), 1 no-artifact");
   expect(text).toContain("NOTE: pass rates exclude runs with no artifact (baseline 0/2, proposed 1/2)");
   expect(text).toContain("proposed run 2 no artifact:");
+
+  // Proposed writing the artifact as often as baseline, or more often, is fine.
+  const flipped = await runCompare({
+    config: regression,
+    runners: { baseline: artifactRunner([PASSING_PLAN, undefined]), proposed: artifactRunner([PASSING_PLAN, PASSING_PLAN]) },
+  });
+  expect(flipped.cases[0]!.assertions).toEqual([]);
 
   // An arm that never produced the artifact has no pass rate to compare.
   const empty = artifactRunner([undefined]);

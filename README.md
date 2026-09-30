@@ -322,7 +322,8 @@ Useful overrides:
 
 `compare` exits non-zero when assertions fail. For target scenarios, baseline
 must not fully pass and proposed must improve the pass rate. For regression
-scenarios, proposed must not fall below baseline.
+scenarios, proposed must not fall below baseline, and must not produce the
+artifact in fewer of its runs than baseline.
 
 Reading results:
 
@@ -341,7 +342,10 @@ Reading results:
   pass rate and counted on their own (`1/1 pass (100%), 1 no-artifact`),
   with a `NOTE` naming each arm's count. An arm with no graded run at all
   fails a target or regression assertion, since it has no pass rate to
-  compare.
+  compare. A regression assertion also fails when proposed produces the
+  artifact in a smaller share of its runs than baseline: a skill change that
+  stops the agent writing the file is a regression even if the runs that do
+  write it all pass.
 
 ### Raw per-run results
 
