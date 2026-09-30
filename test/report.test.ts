@@ -62,3 +62,12 @@ test("appendNdjsonReport appends across invocations and creates parent dirs", ()
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test("report records carry a noArtifact count only when some run produced no artifact", () => {
+  const summary = makeSummary();
+  const scope = summary.cases[0]!;
+  scope.proposed = { ...scope.proposed, totalRuns: 4, noArtifact: 1 };
+  const [record] = buildReportRecords(summary, "2026-01-01T00:00:00.000Z");
+  expect((record?.proposed as Record<string, unknown>).noArtifact).toBe(1);
+  expect(record?.baseline).not.toHaveProperty("noArtifact");
+});
