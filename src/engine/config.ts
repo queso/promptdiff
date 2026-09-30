@@ -218,7 +218,7 @@ export function loadCompareConfig(
     cases: rawCases.map((rawCase, index) => normalizeCase(baseDir, recordValue(rawCase, `scenarios[${index}]`), index)),
   };
 
-  validateCompareConfig(config);
+  validateCompareConfig(config, options);
   return config;
 }
 
@@ -243,11 +243,16 @@ function normalizeCase(baseDir: string, raw: RawCase, index: number): EvalCaseCo
   };
 }
 
-function validateCompareConfig(config: CompareConfig): void {
-  if (config.baselineSkills.length === 0) {
-    throw new Error("compare requires at least one baseline skill");
-  }
-  if (config.proposedSkills.length === 0) {
+function validateCompareConfig(config: CompareConfig, options: LoadOptions = {}): void {
+  // An explicit empty baselineSkills is a valid comparison: "does adding this
+  // skill change anything at all" needs a no-skill baseline arm. normalizeSkills
+  // already rejects an omitted or misspelled key, so a typo still fails loudly.
+  //
+  // In single-arm (measure) mode the proposed arm is a mirror of baseline that
+  // no run ever exercises, so an empty mirror is not a missing proposed set.
+  // Requiring content there would reject "characterize the agent with no
+  // skills," the measure-side version of the question this baseline change enables.
+  if (!options.singleArm && config.proposedSkills.length === 0) {
     throw new Error("compare requires at least one proposed skill");
   }
   if (config.runs < 1) {

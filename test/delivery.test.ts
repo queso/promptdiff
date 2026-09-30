@@ -81,6 +81,66 @@ test("install delivery puts arm skills in each sandbox registry and keeps them o
   }
 });
 
+test("inline delivery with an empty baseline sends the agent body alone, with no SKILL marker", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "promptdiff-delivery-empty-baseline-"));
+  try {
+    const agent = join(dir, "agent.md");
+    writeFileSync(agent, "Agent persona", "utf8");
+    // Inline delivery reads skill paths as files directly (assembleSystemPrompt
+    // maps over them and reads each one), unlike install delivery's directories.
+    const proposed = join(dir, "proposed-skill.md");
+    writeFileSync(proposed, "PROPOSED_MARKER", "utf8");
+
+    const seenPrompts: { arm: string; prompt: string }[] = [];
+    const runner: Runner = {
+      name: "mock",
+      capabilities: { sandboxTools: true, skillRegistry: true, images: false, streamEvents: false },
+      async run(options: RunnerRunOptions) {
+        const arm = options.systemPrompt.includes("PROPOSED_MARKER") ? "proposed" : "baseline";
+        seenPrompts.push({ arm, prompt: options.systemPrompt });
+        return { output: "ok", costUsd: 0.1, turns: 1, durationMs: 10, models: ["sonnet"], raw: {} };
+      },
+    };
+
+    const config: CompareConfig = {
+      name: "inline delivery, empty baseline",
+      agent,
+      baselineSkills: [],
+      proposedSkills: [proposed],
+      delivery: "inline",
+      arms: {
+        baseline: { model: "sonnet", runner: "claude-p" },
+        proposed: { model: "sonnet", runner: "claude-p" },
+      },
+      runs: 1,
+      timeoutMs: 1_000,
+      maxBudgetUsd: 1,
+      addDirs: [],
+      sandboxRoot: join(dir, "runs"),
+      keepSandbox: false,
+      cases: [
+        {
+          name: "target",
+          kind: "target",
+          prompt: "do the task",
+          grader: { type: "text", contains: ["ok"] },
+          images: [],
+          addDirs: [],
+        },
+      ],
+    };
+
+    await runCompare({ config, runners: { baseline: runner, proposed: runner } });
+    const baselinePrompt = seenPrompts.find((entry) => entry.arm === "baseline")?.prompt;
+    // No baseline skills means assembleSystemPrompt has nothing to join in.
+    // The baseline arm's prompt is the agent file, verbatim, with no skill section.
+    expect(baselinePrompt).toBe("Agent persona");
+    expect(baselinePrompt).not.toContain("===== SKILL");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test("scenario files parse delivery and reject install with disabled tools", () => {
   const dir = mkdtempSync(join(tmpdir(), "promptdiff-delivery-config-"));
   try {

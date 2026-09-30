@@ -4,3 +4,4 @@ node_modules/
 .promptdiff/
 scratch/
 .claude/
+.env

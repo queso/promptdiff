@@ -296,6 +296,13 @@ Create a scenario file:
 
 Paths inside a scenario file are resolved relative to that scenario file.
 
+`baselineSkills` may be `[]`, which compares "no skill" against a proposed
+skill: the question of whether adding the skill changes anything at all. This
+is preferable to pointing baseline at a placeholder skill file, which
+contaminates the baseline arm: its text lands in the system prompt under
+inline delivery, and its description is visible in the registry under install
+delivery.
+
 Run it:
 
 ```bash
@@ -464,7 +471,8 @@ per-case pass rates, no delta and no assertions:
 
 The scenario file is the compare format — render vars, images, pricing,
 `productionModel`, and every grader type apply — but only `skills` (or
-`baselineSkills`) is required; no proposed arm. Don't fake this with
+`baselineSkills`) is required; no proposed arm. An explicit `[]` is valid and
+measures the agent with no skills. Don't fake this with
 identical compare arms: two identical arms at small n routinely produce
 verdicts like `FAIL: proposed regressed below baseline` out of pure sampling
 noise. `measure` exits 0 whenever the runs complete — a measurement has no

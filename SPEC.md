@@ -158,7 +158,7 @@ exactly one arm is openai).
 A compare file defines:
 
 - agent file
-- baseline skill files (or a shared skill set both arms inherit)
+- baseline skill files, empty to compare against no skill, or a shared skill set both arms inherit
 - proposed skill files
 - model (shared, or per arm for model comparisons)
 - run count
