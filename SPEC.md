@@ -69,6 +69,11 @@ used as a substitute for sandboxing.
 The runner captures final output text, `total_cost_usd`, turn count, duration,
 and model usage keys.
 
+The `--tools` value comes from the per-case `tools` field, then `--tools` or
+the top-level `tools` field, then the mode default (`""` for text mode,
+`default` for artifact mode or install delivery). An explicit `""` at any
+level means no tools and is never treated as unset.
+
 A `maxTurns` cap (scenario field, per-case override, or `--max-turns`) is
 passed through as `--max-turns`. A run that stops at the cap (result subtype
 `error_max_turns`, on any exit code) is returned as a normal result flagged

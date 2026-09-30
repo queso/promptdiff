@@ -2,7 +2,9 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { expect, test } from "bun:test";
-import { loadCompareConfig } from "../src/engine/config";
+import { runCompare } from "../src/engine/compare";
+import { loadCompareConfig, type CompareConfig } from "../src/engine/config";
+import type { Runner, RunnerRunOptions } from "../src/types";
 
 test("loadCompareConfig normalizes paths and rejects zero case runs", () => {
   const dir = mkdtempSync(join(tmpdir(), "promptdiff-config-test-"));
@@ -318,6 +320,98 @@ test("loadCompareConfig accepts an explicit empty baselineSkills but still requi
       "utf8",
     );
     expect(() => loadCompareConfig(join(dir, "empty-proposed.json"))).toThrow("compare requires at least one proposed skill");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+function toolsRecordingRunner(sandboxTools: boolean, toolsSeen: string[]): Runner {
+  return {
+    name: sandboxTools ? "claude-p" : "openai",
+    capabilities: { sandboxTools, skillRegistry: sandboxTools, images: false, streamEvents: false },
+    async run(options: RunnerRunOptions) {
+      toolsSeen.push(options.tools);
+      return { output: "ok", costUsd: 0, turns: 1, durationMs: 1, models: [options.model], raw: {} };
+    },
+  };
+}
+
+async function toolsSeenBy(config: CompareConfig, sandboxTools: boolean): Promise<string[]> {
+  const toolsSeen: string[] = [];
+  const runner = toolsRecordingRunner(sandboxTools, toolsSeen);
+  await runCompare({ config, runners: { baseline: runner, proposed: runner } });
+  return toolsSeen;
+}
+
+test('scenario "tools": "" means no tools, the same as --tools ""', async () => {
+  const dir = mkdtempSync(join(tmpdir(), "promptdiff-config-empty-tools-"));
+  try {
+    writeFileSync(join(dir, "agent.md"), "Agent", "utf8");
+    writeFileSync(join(dir, "baseline.md"), "Baseline", "utf8");
+    writeFileSync(join(dir, "proposed.md"), "Proposed", "utf8");
+    const base = {
+      agent: "./agent.md",
+      baselineSkills: ["./baseline.md"],
+      proposedSkills: ["./proposed.md"],
+      model: "gpt-4o-mini",
+      runner: "openai",
+      runs: 1,
+      sandbox: { root: "./runs" },
+    };
+    const textCase = { name: "t", prompt: "p", grader: { type: "text", contains: ["ok"] } };
+
+    // The shape from issue #37: top-level text mode with an explicit empty tools list.
+    writeFileSync(join(dir, "top-level.json"), JSON.stringify({ ...base, mode: "text", tools: "", scenarios: [textCase] }), "utf8");
+    writeFileSync(join(dir, "no-tools-key.json"), JSON.stringify({ ...base, mode: "text", scenarios: [textCase] }), "utf8");
+    const fromJson = loadCompareConfig(join(dir, "top-level.json"));
+    const fromFlag = loadCompareConfig(join(dir, "no-tools-key.json"), { tools: "" });
+    expect(fromJson.tools).toBe("");
+    expect(fromJson.tools).toBe(fromFlag.tools!);
+    // Runs on a text-only runner with no tools, exactly as the flag does.
+    expect(await toolsSeenBy(fromJson, false)).toEqual(["", ""]);
+    expect(await toolsSeenBy(fromFlag, false)).toEqual(["", ""]);
+
+    // "" must not read as unset: artifact mode would otherwise fall back to "default".
+    writeFileSync(
+      join(dir, "artifact.json"),
+      JSON.stringify({ ...base, runner: "claude-p", tools: "", scenarios: [{ ...textCase, mode: "artifact" }] }),
+      "utf8",
+    );
+    expect(await toolsSeenBy(loadCompareConfig(join(dir, "artifact.json")), true)).toEqual(["", ""]);
+
+    // A per-scenario "" overrides a top-level tools list, so the text-only runner accepts it.
+    writeFileSync(
+      join(dir, "per-case.json"),
+      JSON.stringify({ ...base, tools: "Bash,Read", scenarios: [{ ...textCase, tools: "" }] }),
+      "utf8",
+    );
+    const perCase = loadCompareConfig(join(dir, "per-case.json"));
+    expect(perCase.cases[0]?.tools).toBe("");
+    expect(await toolsSeenBy(perCase, false)).toEqual(["", ""]);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("a non-string tools value fails with a message naming the field", () => {
+  const dir = mkdtempSync(join(tmpdir(), "promptdiff-config-bad-tools-"));
+  try {
+    writeFileSync(join(dir, "agent.md"), "Agent", "utf8");
+    writeFileSync(join(dir, "baseline.md"), "Baseline", "utf8");
+    writeFileSync(join(dir, "proposed.md"), "Proposed", "utf8");
+    const base = {
+      agent: "./agent.md",
+      baselineSkills: ["./baseline.md"],
+      proposedSkills: ["./proposed.md"],
+      model: "sonnet",
+    };
+    const textCase = { name: "t", prompt: "p", grader: { type: "text", contains: ["ok"] } };
+
+    writeFileSync(join(dir, "top-level.json"), JSON.stringify({ ...base, tools: ["Bash"], scenarios: [textCase] }), "utf8");
+    expect(() => loadCompareConfig(join(dir, "top-level.json"))).toThrow(/^tools must be a string/);
+
+    writeFileSync(join(dir, "per-case.json"), JSON.stringify({ ...base, scenarios: [{ ...textCase, tools: false }] }), "utf8");
+    expect(() => loadCompareConfig(join(dir, "per-case.json"))).toThrow(/^t\.tools must be a string/);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
