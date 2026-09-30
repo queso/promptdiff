@@ -145,14 +145,25 @@ async function gradeCommand(
     },
     stdout: "pipe",
     stderr: "pipe",
+    // Own process group, so a timeout can kill the shell's children too. A
+    // file grader is `sh -> bun`; killing only the shell leaves bun holding
+    // the output pipes open until it exits on its own.
+    detached: true,
   });
 
+  const kill = (signal: NodeJS.Signals) => {
+    try {
+      process.kill(-proc.pid, signal);
+    } catch {
+      proc.kill(signal);
+    }
+  };
   let timedOut = false;
   const timeoutMs = spec.timeoutMs ?? 120_000;
   const timeout = setTimeout(() => {
     timedOut = true;
-    proc.kill("SIGTERM");
-    setTimeout(() => proc.kill("SIGKILL"), 2_000);
+    kill("SIGTERM");
+    setTimeout(() => kill("SIGKILL"), 2_000);
   }, timeoutMs);
 
   const [stdout, stderr, code] = await Promise.all([

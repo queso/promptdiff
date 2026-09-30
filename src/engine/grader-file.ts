@@ -87,7 +87,8 @@ export interface GraderFileRun {
  */
 export async function runGraderFile(file: string, name: string, cwd: string = process.cwd()): Promise<GraderFileRun> {
   const loaded = await loadGraderFile(file);
-  const fn = loaded.graders[name];
+  // Own keys only: "constructor" or "toString" must not resolve to Object.prototype.
+  const fn = Object.hasOwn(loaded.graders, name) ? loaded.graders[name] : undefined;
   if (fn === undefined) {
     return {
       exitCode: GRADER_USAGE_EXIT_CODE,

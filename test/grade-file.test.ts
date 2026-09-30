@@ -7,6 +7,7 @@ import { buildCacheKey } from "../src/engine/cache";
 import { formatCompareSummary, formatMeasureSummary, runCompare, runMeasure } from "../src/engine/compare";
 import { loadCompareConfig } from "../src/engine/config";
 import { gradeRun } from "../src/engine/grader";
+import { fisherExactTwoTailedP } from "../src/engine/stats";
 import { NO_ARTIFACT_EXIT_CODE, runGraderFile } from "../src/engine/grader-file";
 import type { Runner, RunnerRunOptions } from "../src/types";
 
@@ -170,6 +171,45 @@ test("runGraderFile resolves the artifact against the grader cwd and maps outcom
   expect(unknown.exitCode).toBe(2);
   expect(unknown.stderr[0]).toContain('no grader named "nope" (has: covers-8, bare-name)');
 });
+
+test("inherited Object.prototype names are not graders", async () => {
+  const dir = join(root, "inherited-names");
+  const file = writeGraderFile(dir);
+  const sandbox = join(dir, "sandbox");
+  mkdirSync(sandbox, { recursive: true });
+  writeArtifact(sandbox, PASSING_PLAN);
+
+  for (const name of ["constructor", "toString", "hasOwnProperty"]) {
+    const result = await runGraderFile(file, name, sandbox);
+    expect(result.exitCode).toBe(2);
+    expect(result.stderr[0]).toContain(`no grader named "${name}"`);
+  }
+  // A scenario naming one fails at load, before any paid run.
+  const path = writeScenario(dir, { file: "./grade.eval.ts", name: "constructor" });
+  expect(() => loadCompareConfig(path, {}, { singleArm: true })).toThrow(/has no grader named "constructor"/);
+});
+
+test("a file grader that hangs is killed at timeoutMs and fails as a timeout, not no-artifact", async () => {
+  const dir = join(root, "timeout");
+  const file = writeGraderFile(
+    dir,
+    `import { grade } from "@theaiteam/promptdiff";
+export default grade("out/plan.json", {
+  hang: async () => { await new Promise((r) => setTimeout(r, 10_000)); },
+});
+`,
+  );
+  const sandbox = join(dir, "sandbox");
+  mkdirSync(sandbox, { recursive: true });
+  writeArtifact(sandbox, PASSING_PLAN);
+
+  const started = Date.now();
+  const result = await gradeRun({ type: "file", file, name: "hang", timeoutMs: 1_500 }, { run, sandboxDir: sandbox });
+  expect(result.pass).toBe(false);
+  expect(result.noArtifact).toBeUndefined();
+  expect(result.message).toBe("grader timed out after 1500ms");
+  expect(Date.now() - started).toBeLessThan(8_000);
+}, 15_000);
 
 test("a file grader runs as a command in the sandbox and reports no-artifact distinctly", async () => {
   const dir = join(root, "grade-run");
@@ -357,6 +397,26 @@ test("compare excludes no-artifact runs from pass rates, notes them, and refuses
   const none = await runCompare({ config: regression, runners: { baseline: shared, proposed: empty } });
   expect(none.cases[0]!.assertions).toEqual(["proposed produced no artifact in any run; there is nothing to compare"]);
   expect(formatCompareSummary(none)).toContain("proposed: 0/0 pass (n/a), 2 no-artifact");
+});
+
+test("compare leaves samplingP undefined when an arm has no graded runs, and uses graded denominators otherwise", async () => {
+  const dir = join(root, "sampling-p");
+  writeGraderFile(dir);
+  writeFileSync(join(dir, "proposed.md"), "PROPOSED", "utf8");
+  const path = writeScenario(dir, { file: "./grade.eval.ts", name: "covers-8" }, { proposedSkills: ["./proposed.md"] });
+  const config = loadCompareConfig(path, { sandboxRoot: join(dir, "runs"), runs: 2 });
+
+  const shared = artifactRunner([PASSING_PLAN, PASSING_PLAN]);
+  const none = await runCompare({ config, runners: { baseline: shared, proposed: artifactRunner([undefined]) } });
+  expect(none.cases[0]!.samplingP).toBeUndefined();
+
+  // Baseline 2/2 graded, proposed 1/1 graded plus one no-artifact run.
+  const mixed = await runCompare({
+    config,
+    runners: { baseline: artifactRunner([PASSING_PLAN]), proposed: artifactRunner([PASSING_PLAN, undefined]) },
+  });
+  expect(mixed.cases[0]!.proposed).toMatchObject({ passes: 1, noArtifact: 1 });
+  expect(mixed.cases[0]!.samplingP).toBe(fisherExactTwoTailedP(2, 2, 1, 1));
 });
 
 test("the baseline cache key covers the grader file's content", () => {

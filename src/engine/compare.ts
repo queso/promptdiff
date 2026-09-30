@@ -115,7 +115,7 @@ export async function runCompare(options: CompareRunOptions): Promise<CompareSum
       baseline,
       proposed,
       assertions: evaluateAssertions(evalCase, baseline, proposed),
-      samplingP: fisherExactTwoTailedP(baseline.passes, gradedRuns(baseline), proposed.passes, gradedRuns(proposed)),
+      samplingP: samplingP(baseline, proposed),
       promptSha256: { baseline: sha256(baselineSystem), proposed: sha256(proposedSystem) },
     });
   }
@@ -235,6 +235,12 @@ function describeUnpassedRun(run: ArmRunSummary): string {
   return run.grade.message.startsWith("no artifact")
     ? `run ${run.run} ${run.grade.message}`
     : `run ${run.run} no artifact: ${run.grade.message}`;
+}
+
+/** Undefined when an arm has no graded runs: there is no rate to test. */
+function samplingP(baseline: ArmSummary, proposed: ArmSummary): number | undefined {
+  if (gradedRuns(baseline) === 0 || gradedRuns(proposed) === 0) return undefined;
+  return fisherExactTwoTailedP(baseline.passes, gradedRuns(baseline), proposed.passes, gradedRuns(proposed));
 }
 
 function gradedRuns(arm: ArmSummary): number {
