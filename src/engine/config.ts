@@ -210,7 +210,7 @@ export function loadCompareConfig(
     maxBudgetUsd: overrides.maxBudgetUsd ?? numberValue(raw.maxBudgetUsd, 1),
     maxTurns: overrides.maxTurns ?? optionalNumber(raw.maxTurns, "maxTurns"),
     mode: overrides.mode ?? modeValue(raw.mode, undefined),
-    tools: overrides.tools ?? stringValue(raw.tools, undefined),
+    tools: overrides.tools ?? toolsValue(raw.tools, "tools"),
     addDirs: (overrides.addDirs ?? stringArray(raw.addDirs, "addDirs")).map((dir) => resolveFrom(baseDir, dir)),
     sandboxRoot,
     sandboxSeed,
@@ -238,7 +238,7 @@ function normalizeCase(baseDir: string, raw: RawCase, index: number): EvalCaseCo
     seed: optionalPath(baseDir, stringValue(raw.seed, undefined)),
     addDirs: stringArray(raw.addDirs, `${name}.addDirs`).map((dir) => resolveFrom(baseDir, dir)),
     mode: modeValue(raw.mode, undefined),
-    tools: stringValue(raw.tools, undefined),
+    tools: toolsValue(raw.tools, `${name}.tools`),
     maxTurns: optionalNumber(raw.maxTurns, `${name}.maxTurns`),
   };
 }
@@ -460,6 +460,15 @@ function modeValue(value: unknown, fallback: RunMode | undefined): RunMode | und
   if (value === undefined) return fallback;
   if (value === "text" || value === "artifact") return value;
   throw new Error(`mode must be "text" or "artifact"`);
+}
+
+/** Accepts "" like the --tools "" flag: an explicit empty list disables tools. */
+function toolsValue(value: unknown, label: string): string | undefined {
+  if (value === undefined) return undefined;
+  if (typeof value !== "string") {
+    throw new Error(`${label} must be a string: a comma-separated tool list, "default", or "" for no tools`);
+  }
+  return value;
 }
 
 function stringValue(value: unknown, fallback: string): string;

@@ -126,6 +126,13 @@ runs need headroom. Set `maxBudgetUsd` to `3` or more for artifact scenarios.
 A run that hits the cap fails with an explicit
 `claude hit the $N max budget` error rather than a silent bad sample.
 
+**Tools:** `--tools <list|default|''>` (or `"tools"` in a scenario file, with
+a per-case override) sets the tools each run gets: a comma-separated list,
+`default`, or `""` for none. `"tools": ""` in a scenario file means the same
+as `--tools ""`. When unset, text mode gets no tools and artifact mode gets
+`default`. A per-case `"tools"` wins over the top-level value and over
+`--tools`.
+
 **Turn cap:** `--max-turns <n>` (or `"maxTurns"` in a scenario file, with a
 per-case override) caps agentic turns per run on the claude-p runner. Unlike
 a budget abort, a turn-capped run is a *measured outcome*: it is recorded and
